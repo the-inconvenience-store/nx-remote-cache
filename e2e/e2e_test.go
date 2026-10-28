@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/the-inconvenience-store/nx-remote-cache/internal/garagetest"
+	"github.com/the-inconvenience-store/nx-remote-cache/internal/s3test"
 )
 
 const (
@@ -55,34 +55,40 @@ func (b *syncBuffer) String() string {
 
 func TestNxUsesRemoteCacheAndSurvivesStorageOutage(t *testing.T) {
 	t.Parallel()
-	garage := garagetest.Start(t)
-	serverURL, serverLog := startServer(t, garage)
-	workspace := createWorkspace(t)
+	binary := buildServer(t)
+	for name, start := range s3test.Starters() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			backend := start(t)
+			serverURL, serverLog := startServer(t, binary, backend)
+			workspace := createWorkspace(t)
 
-	out := nxBuild(t, workspace, serverURL, trustedToken)
-	if !strings.Contains(out, missMarker) {
-		t.Fatalf("first build should run and upload:\n%s", out)
-	}
-	if !strings.Contains(serverLog.String(), `method=PUT`) {
-		t.Fatalf("no upload reached the server:\n%s", serverLog.String())
-	}
+			out := nxBuild(t, workspace, serverURL, trustedToken)
+			if !strings.Contains(out, missMarker) {
+				t.Fatalf("first build should run and upload:\n%s", out)
+			}
+			if !strings.Contains(serverLog.String(), `method=PUT`) {
+				t.Fatalf("no upload reached the server:\n%s", serverLog.String())
+			}
 
-	out = nxBuild(t, workspace, serverURL, readOnlyToken)
-	if !strings.Contains(out, remoteMarker) {
-		t.Fatalf("read-only build should restore from the remote cache:\n%s", out)
-	}
+			out = nxBuild(t, workspace, serverURL, readOnlyToken)
+			if !strings.Contains(out, remoteMarker) {
+				t.Fatalf("read-only build should restore from the remote cache:\n%s", out)
+			}
 
-	garage.Stop(t)
-	out = nxBuild(t, workspace, serverURL, trustedToken)
-	if !strings.Contains(out, missMarker) {
-		t.Fatalf("build during storage outage should rebuild as a cache miss:\n%s", out)
-	}
-	if !strings.Contains(serverLog.String(), `msg="Storage unavailable"`) {
-		t.Fatalf("outage not logged:\n%s", serverLog.String())
+			backend.Stop(t)
+			out = nxBuild(t, workspace, serverURL, trustedToken)
+			if !strings.Contains(out, missMarker) {
+				t.Fatalf("build during storage outage should rebuild as a cache miss:\n%s", out)
+			}
+			if !strings.Contains(serverLog.String(), `msg="Storage unavailable"`) {
+				t.Fatalf("outage not logged:\n%s", serverLog.String())
+			}
+		})
 	}
 }
 
-func startServer(t *testing.T, garage *garagetest.Garage) (string, *syncBuffer) {
+func buildServer(t *testing.T) string {
 	t.Helper()
 	binary := filepath.Join(t.TempDir(), "nx-remote-cache")
 	//nolint:gosec // builds this repo's server into a test temp dir
@@ -90,16 +96,21 @@ func startServer(t *testing.T, garage *garagetest.Garage) (string, *syncBuffer) 
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build server: %v\n%s", err, out)
 	}
+	return binary
+}
+
+func startServer(t *testing.T, binary string, backend *s3test.Backend) (string, *syncBuffer) {
+	t.Helper()
 	port := freePort(t)
 	logs := &syncBuffer{}
-	cmd := exec.CommandContext(context.WithoutCancel(t.Context()), binary) //nolint:gosec // runs the binary built above
+	cmd := exec.CommandContext(context.WithoutCancel(t.Context()), binary)
 	cmd.Env = append(os.Environ(),
 		"PORT="+strconv.Itoa(port),
-		"AWS_REGION="+garagetest.Region,
-		"AWS_ACCESS_KEY_ID="+garagetest.AccessKeyID,
-		"AWS_SECRET_ACCESS_KEY="+garagetest.SecretAccessKey,
-		"S3_BUCKET_NAME="+garagetest.Bucket,
-		"S3_ENDPOINT_URL="+garage.Endpoint,
+		"AWS_REGION="+backend.Region,
+		"AWS_ACCESS_KEY_ID="+backend.AccessKeyID,
+		"AWS_SECRET_ACCESS_KEY="+backend.SecretAccessKey,
+		"S3_BUCKET_NAME="+s3test.Bucket,
+		"S3_ENDPOINT_URL="+backend.Endpoint,
 		"NX_CACHE_ACCESS_TOKEN="+trustedToken,
 		"NX_CACHE_READ_ONLY_TOKEN="+readOnlyToken,
 	)

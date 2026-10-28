@@ -19,8 +19,8 @@ mise pins all tools and runs tasks (`mise run <task>`):
 - `fmt` / `fmt-check` — golangci-lint formatters
 - `lint` — golangci-lint, hadolint, actionlint, typos, helm lint
 - `test` — unit tests (no Docker)
-- `test-integration` — Garage via testcontainers (Docker)
-- `e2e` — real Nx 23.3 builds (Docker + Node)
+- `test-integration` — Garage + versitygw via testcontainers (Docker)
+- `e2e` — real Nx 23.3 builds on both backends (Docker + Node)
 - `test-s3` — optional atomic-write contract against a real bucket
 - `audit` (govulncheck), `deadcode`, `check` (full local gate)
 - `dev` — Garage via `compose.yaml` + server with `.env.local`
@@ -43,8 +43,11 @@ mise pins all tools and runs tasks (`mise run <task>`):
 ## Testing
 
 - Unit: package `server_test` exercises the handler against an httptest fake S3.
-- `//go:build integration`: testcontainers-go with Garage.
-- `//go:build e2e` (`e2e/`): Nx 23.3 workspace builds, cache miss then hit.
+- `//go:build integration`: testcontainers-go via `internal/s3test`. Feature
+  tests run on Garage (ignores `If-None-Match`) and versitygw (enforces it);
+  the 20-round atomic-write race runs on versitygw only.
+- `//go:build e2e` (`e2e/`): Nx 23.3 builds on both backends: miss + upload,
+  read-only remote hit, rebuild during storage outage.
 - `//go:build s3contract`: env-configured contract against real S3.
 
 ## Environment Variables

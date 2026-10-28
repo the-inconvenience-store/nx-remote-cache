@@ -152,8 +152,11 @@ needed. Authentication, checksum, network, and unrelated storage errors remain
 errors. See
 [S3 conditional-write semantics](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html).
 
-To measure a backend's atomic-write capability, run the optional contract test
-against a disposable bucket:
+Conditional writes are verified by the integration suite, which races concurrent
+writers against [versitygw](https://github.com/versity/versitygw), an S3
+gateway that enforces `If-None-Match`, and requires exactly one winner every
+round. To measure your own backend's atomic-write capability, run the optional
+contract test against a disposable bucket:
 
 ```bash
 AWS_REGION=your-region \
@@ -216,8 +219,8 @@ all tasks.
 | `mise run fmt-check` | Fail if Go code is not formatted |
 | `mise run lint` | golangci-lint, hadolint, actionlint, typos, helm lint |
 | `mise run test` | Unit tests (no Docker) |
-| `mise run test-integration` | Integration tests against Garage via testcontainers (needs Docker) |
-| `mise run e2e` | Real Nx 23.3 builds against the server and Garage (needs Docker and Node) |
+| `mise run test-integration` | Feature suite against Garage and versitygw, plus atomic-write races on versitygw (needs Docker) |
+| `mise run e2e` | Real Nx 23.3 builds against the server on Garage and versitygw (needs Docker and Node) |
 | `mise run test-s3` | Optional atomic-write contract against a real bucket |
 | `mise run audit` | govulncheck |
 | `mise run deadcode` | Report functions unreachable from main |
@@ -234,12 +237,14 @@ checked by [cocogitto](https://docs.cocogitto.io) locally and in CI.
 
 Tests: unit tests use the standard library `testing` package with a fake S3 and
 need no Docker. Integration tests (`integration` build tag) and Nx end-to-end
-tests (`e2e` tag) start Garage with testcontainers and need Docker; e2e also
-needs Node to run Nx 23.3. The S3 contract test (`s3contract` tag) is optional
-and runs against a bucket you configure.
+tests (`e2e` tag) start real S3 servers with testcontainers and need Docker; e2e
+also needs Node to run Nx 23.3. Every feature test runs against both Garage
+(accepts but does not enforce `If-None-Match`) and versitygw (enforces it); the
+atomic-write race runs on versitygw. The S3 contract test (`s3contract` tag) is
+optional and runs against a bucket you configure.
 
-Dependabot updates Go modules, Docker base images and GitHub Actions weekly.
-Tool pins in `mise.toml` are updated with `mise upgrade --bump`.
+Tool pins in `mise.toml` are updated with `mise upgrade --bump`. Dependabot
+(Go modules, Docker base images, GitHub Actions) is added once CI is enabled.
 
 ## Acknowledgements
 
