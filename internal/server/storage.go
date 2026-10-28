@@ -53,7 +53,7 @@ func newS3Client(ctx context.Context, cfg Config) (*s3.Client, error) {
 	return s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 		o.UsePathStyle = true
 		if cfg.Endpoint != "" {
-			o.BaseEndpoint = aws.String(cfg.Endpoint)
+			o.BaseEndpoint = new(cfg.Endpoint)
 		}
 		// Optional checksums would wrap uploads in aws-chunked encoding or force
 		// buffering of the one-shot request body; S3-compatible stores vary.

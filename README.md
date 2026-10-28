@@ -180,7 +180,8 @@ the server degrades when storage fails so CI keeps building:
   no response headers within 5 seconds.
 - `PUT` returns 403 `Cache storage unavailable; artifact not stored`, so Nx
   continues without caching the artifact.
-- Each degraded response logs `Storage unavailable during GET|PUT <hash>`.
+- Each degraded response logs `msg="Storage unavailable"` with `method`, `hash`,
+  and the underlying `error`.
 - A bad Nx access token still returns 401.
 
 Set `NX_CACHE_FAIL_OPEN=false` to return 503 `Cache storage unavailable`

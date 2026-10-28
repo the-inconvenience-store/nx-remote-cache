@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
@@ -58,11 +57,11 @@ func (h *handler) putObject(w http.ResponseWriter, r *http.Request, hash string)
 		Bucket:        &h.cfg.Bucket,
 		Key:           &hash,
 		Body:          body,
-		ContentLength: aws.Int64(r.ContentLength),
+		ContentLength: new(r.ContentLength),
 	}
 	conditional := !h.conditionalUnsupported.Load()
 	if conditional {
-		input.IfNoneMatch = aws.String("*")
+		input.IfNoneMatch = new("*")
 	}
 	// The request body streams straight to S3 and cannot be replayed, so the
 	// payload is unsigned and the SDK must not retry.
