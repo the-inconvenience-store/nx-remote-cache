@@ -19,7 +19,9 @@ helm install nx-cache oci://ghcr.io/the-inconvenience-store/charts/nx-remote-cac
 ```
 
 Set `config.s3.endpointUrl` for S3-compatible storage other than AWS S3; leave
-it empty for AWS.
+it empty for AWS. Requests use virtual-hosted style on AWS and path-style with
+an endpoint; set `config.s3.forcePathStyle` to `"true"` or `"false"` to
+override (for example `"true"` for an AWS bucket whose name contains a dot).
 
 ## Using an externally managed Secret
 
@@ -136,6 +138,7 @@ helm install nx-cache oci://ghcr.io/the-inconvenience-store/charts/nx-remote-cac
 | `config.awsRegion` | `us-east-1` | `AWS_REGION` |
 | `config.s3.bucketName` | `nx-cloud` | `S3_BUCKET_NAME` |
 | `config.s3.endpointUrl` | `""` | `S3_ENDPOINT_URL`; omitted when empty (AWS S3) |
+| `config.s3.forcePathStyle` | `""` | `S3_FORCE_PATH_STYLE` (`"true"` or `"false"`); omitted when empty |
 | `secrets.existingSecret` | `""` | If set, skip Secret creation and use this one |
 | `secrets.nxCacheAccessToken` | `""` | Required if `existingSecret` is empty |
 | `secrets.nxCacheReadOnlyToken` | `""` | Optional download-only token |

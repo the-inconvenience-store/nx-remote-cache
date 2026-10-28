@@ -40,7 +40,8 @@ func TestLoadSettingsAppliesDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if s.port != 3000 || s.server.Region != "us-east-1" || s.server.Bucket != "nx-cloud" ||
-		!s.server.FailOpen || s.server.ReadOnlyTokens != nil || s.tls != nil {
+		!s.server.FailOpen || s.server.ReadOnlyTokens != nil || s.tls != nil ||
+		s.server.AddressStyle != server.AddressStyleAuto {
 		t.Fatalf("unexpected defaults: %+v", s)
 	}
 }
@@ -60,6 +61,24 @@ func TestLoadSettingsSplitsTokenListsAtCommas(t *testing.T) {
 	}
 }
 
+func TestLoadSettingsReadsForcedAddressStyle(t *testing.T) {
+	t.Parallel()
+	for value, want := range map[string]server.AddressStyle{
+		"true":  server.AddressStylePath,
+		"false": server.AddressStyleVirtualHosted,
+	} {
+		values := validEnv()
+		values["S3_FORCE_PATH_STYLE"] = value
+		s, err := loadSettings(env(values))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.server.AddressStyle != want {
+			t.Errorf("S3_FORCE_PATH_STYLE=%s: got style %d, want %d", value, s.server.AddressStyle, want)
+		}
+	}
+}
+
 func TestLoadSettingsRejectsInvalidConfiguration(t *testing.T) {
 	t.Parallel()
 	cases := map[string]struct {
@@ -72,6 +91,8 @@ func TestLoadSettingsRejectsInvalidConfiguration(t *testing.T) {
 		"empty fail-open":     {"NX_CACHE_FAIL_OPEN", "", errFailOpen},
 		"cert without key":    {"TLS_CERT_PATH", "testdata/cert.pem", errTLSPair},
 		"unreadable key pair": {"TLS_KEY_PATH", "missing.pem", errTLSPair},
+		"bad path style":      {"S3_FORCE_PATH_STYLE", "yes", errForcePathStyle},
+		"empty path style":    {"S3_FORCE_PATH_STYLE", "", errForcePathStyle},
 	}
 	for name, tc := range cases {
 		values := validEnv()

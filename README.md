@@ -33,7 +33,8 @@ Invalid configuration prints an error to stderr and exits with status 1. See
 | `PORT` | no | `3000` | Listen port. |
 | `AWS_REGION` | no | `us-east-1` | |
 | `S3_BUCKET_NAME` | no | `nx-cloud` | |
-| `S3_ENDPOINT_URL` | no | unset (AWS S3) | Custom S3-compatible endpoint. Requests always use path-style addressing. |
+| `S3_ENDPOINT_URL` | no | unset (AWS S3) | Custom S3-compatible endpoint. |
+| `S3_FORCE_PATH_STYLE` | no | unset | `true` (path-style) or `false` (virtual-hosted style); anything else, including empty, is an error. Unset → virtual-hosted style on AWS S3, path-style when `S3_ENDPOINT_URL` is set. On AWS, a bucket name containing a dot can fail TLS in virtual-hosted style; set `true` for such buckets. |
 | `AWS_ACCESS_KEY_ID` | no | unset | Set both AWS keys or neither. Neither → AWS SDK default credential chain. |
 | `AWS_SECRET_ACCESS_KEY` | no | unset | See above. |
 | `NX_CACHE_FAIL_OPEN` | no | `true` | `true` or `false`; anything else is an error. See [Cache outages](#cache-outages). |

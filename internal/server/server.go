@@ -40,8 +40,10 @@ type Config struct {
 	ReadOnlyTokens []string
 	Bucket         string
 	Region         string
-	// Endpoint overrides the S3 endpoint; requests always use path-style URLs.
+	// Endpoint overrides the S3 endpoint for S3-compatible storage.
 	Endpoint string
+	// AddressStyle selects path-style or virtual-hosted-style bucket addressing.
+	AddressStyle AddressStyle
 	// AccessKeyID and SecretAccessKey select static credentials. When both are
 	// empty the AWS SDK default credential chain is used.
 	AccessKeyID     string

@@ -29,9 +29,10 @@ const (
 )
 
 var (
-	errPort     = errors.New("PORT must be an integer between 0 and 65535")
-	errFailOpen = errors.New(`NX_CACHE_FAIL_OPEN must be "true" or "false"`)
-	errTLSPair  = errors.New("TLS misconfiguration")
+	errPort           = errors.New("PORT must be an integer between 0 and 65535")
+	errFailOpen       = errors.New(`NX_CACHE_FAIL_OPEN must be "true" or "false"`)
+	errForcePathStyle = errors.New(`S3_FORCE_PATH_STYLE must be "true" or "false"`)
+	errTLSPair        = errors.New("TLS misconfiguration")
 )
 
 type lookupFunc func(key string) (string, bool)
@@ -73,6 +74,10 @@ func loadSettings(lookup lookupFunc) (settings, error) {
 	if err != nil {
 		return settings{}, err
 	}
+	addressStyle, err := parseAddressStyle(lookup)
+	if err != nil {
+		return settings{}, err
+	}
 	tlsConfig, err := loadTLS(lookup)
 	if err != nil {
 		return settings{}, err
@@ -94,6 +99,7 @@ func loadSettings(lookup lookupFunc) (settings, error) {
 			Bucket:          valueOr(lookup, "S3_BUCKET_NAME", "nx-cloud"),
 			Region:          valueOr(lookup, "AWS_REGION", "us-east-1"),
 			Endpoint:        endpoint,
+			AddressStyle:    addressStyle,
 			AccessKeyID:     keyID,
 			SecretAccessKey: secret,
 			FailOpen:        failOpen,
@@ -146,6 +152,23 @@ func parseFailOpen(lookup lookupFunc) (bool, error) {
 		return false, nil
 	default:
 		return false, errFailOpen
+	}
+}
+
+// parseAddressStyle keeps the server's endpoint-based default when the
+// variable is unset; an empty value is an error.
+func parseAddressStyle(lookup lookupFunc) (server.AddressStyle, error) {
+	value, ok := lookup("S3_FORCE_PATH_STYLE")
+	if !ok {
+		return server.AddressStyleAuto, nil
+	}
+	switch value {
+	case "true":
+		return server.AddressStylePath, nil
+	case "false":
+		return server.AddressStyleVirtualHosted, nil
+	default:
+		return server.AddressStyleAuto, errForcePathStyle
 	}
 }
 

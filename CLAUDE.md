@@ -56,7 +56,8 @@ mise pins all tools and runs tasks (`mise run <task>`):
 Required: `NX_CACHE_ACCESS_TOKEN`. Optional: `NX_CACHE_READ_ONLY_TOKEN` (both
 comma-separated token lists; empty item, duplicate or overlap → startup error),
 `PORT` (3000), `AWS_REGION` (us-east-1), `S3_BUCKET_NAME` (nx-cloud),
-`S3_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (both or
+`S3_ENDPOINT_URL`, `S3_FORCE_PATH_STYLE` (`true`|`false`; unset → path-style
+only with an endpoint), `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (both or
 neither; neither → default credential chain), `NX_CACHE_FAIL_OPEN` (true),
 `TLS_CERT_PATH` + `TLS_KEY_PATH` (both or neither). See README for rules.
 

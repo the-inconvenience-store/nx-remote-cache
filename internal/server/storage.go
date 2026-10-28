@@ -23,6 +23,19 @@ const (
 	responseHeaderTimeout = 30 * time.Second
 )
 
+// AddressStyle selects how S3 requests name the bucket.
+type AddressStyle int
+
+const (
+	// AddressStyleAuto uses virtual-hosted style on AWS (no Endpoint) and path
+	// style for a custom Endpoint.
+	AddressStyleAuto AddressStyle = iota
+	// AddressStylePath puts the bucket in the URL path.
+	AddressStylePath
+	// AddressStyleVirtualHosted puts the bucket in the host name.
+	AddressStyleVirtualHosted
+)
+
 var (
 	errBucketNotFound  = errors.New("S3 bucket not found")
 	errHeadersTimeout  = errors.New("S3 sent no response headers in time")
@@ -50,7 +63,8 @@ func newS3Client(ctx context.Context, cfg *Config) (*s3.Client, error) {
 		return nil, fmt.Errorf("load AWS configuration: %w", err)
 	}
 	return s3.NewFromConfig(awsCfg, func(o *s3.Options) {
-		o.UsePathStyle = true
+		o.UsePathStyle = cfg.AddressStyle == AddressStylePath ||
+			cfg.AddressStyle == AddressStyleAuto && cfg.Endpoint != ""
 		if cfg.Endpoint != "" {
 			o.BaseEndpoint = new(cfg.Endpoint)
 		}
