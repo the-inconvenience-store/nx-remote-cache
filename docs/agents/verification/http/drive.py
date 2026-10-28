@@ -9,6 +9,7 @@ import re
 import secrets
 import shutil
 import signal
+import socket
 import ssl
 import subprocess
 import tempfile
@@ -58,13 +59,22 @@ def expect(method, path, status, token=None, body=None, expected=None):
     return payload
 
 
+def request_counts():
+    with urllib.request.urlopen(f"http://127.0.0.1:{metrics_port}/metrics", timeout=15) as response:
+        if response.status != 200:
+            raise AssertionError(f"GET /metrics on the metrics port: expected 200, got {response.status}")
+        text = response.read().decode()
+    return sorted(line for line in text.splitlines() if line.startswith("nx_cache_requests_total{"))
+
+
 try:
     command("mise", "exec", "--", "go", "build", "-o", str(scratch / "server"), "./cmd/nx-remote-cache")
     record("Built ./cmd/nx-remote-cache from the current checkout")
     env = os.environ.copy()
     # Do not inherit production credentials or optional server configuration.
     for key in list(env):
-        if key.startswith(("AWS_", "NX_CACHE_", "TLS_")) or key in ("PORT", "S3_ENDPOINT_URL", "S3_BUCKET_NAME"):
+        if key.startswith(("AWS_", "NX_CACHE_", "TLS_")) or key in ("PORT", "METRICS_PORT", "S3_ENDPOINT_URL",
+                                                                     "S3_BUCKET_NAME"):
             env.pop(key)
     env.update(GARAGE_DEFAULT_ACCESS_KEY="GK" + secrets.token_hex(12),
                GARAGE_DEFAULT_SECRET_KEY=secrets.token_hex(32), GARAGE_DEFAULT_BUCKET="nx-cloud")
@@ -76,7 +86,11 @@ try:
             "--single-node", "--default-bucket", env=env)
     endpoint = command("docker", "port", container, "3900/tcp").splitlines()[0]
     trusted, reader = secrets.token_hex(24), secrets.token_hex(24)
-    env.update(PORT="0", AWS_REGION="garage", AWS_ACCESS_KEY_ID=env["GARAGE_DEFAULT_ACCESS_KEY"],
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        metrics_port = probe.getsockname()[1]
+    env.update(PORT="0", METRICS_PORT=str(metrics_port), AWS_REGION="garage",
+               AWS_ACCESS_KEY_ID=env["GARAGE_DEFAULT_ACCESS_KEY"],
                AWS_SECRET_ACCESS_KEY=env["GARAGE_DEFAULT_SECRET_KEY"], S3_BUCKET_NAME="nx-cloud",
                S3_ENDPOINT_URL="http://" + endpoint, NX_CACHE_ACCESS_TOKEN=trusted,
                NX_CACHE_READ_ONLY_TOKEN=reader, NX_CACHE_FAIL_OPEN="false" if args.fail_closed else "true")
@@ -99,7 +113,7 @@ try:
     deadline = time.monotonic() + 60
     while True:
         text = (scratch / "server.log").read_text()
-        match = re.search(r'addr="?\[::\]:(\d+)', text)
+        match = re.search(r'msg="Server running" addr="?\[::\]:(\d+)', text)
         if match:
             break
         if process.poll() is not None or time.monotonic() > deadline:
@@ -128,6 +142,15 @@ try:
     expect("PUT", path, 409, token=trusted, body=b"replacement")
     expect("GET", path, 200, token=reader, expected=payload)
     record("Cache proof: stored bytes survive a rejected overwrite and are readable by the read-only consumer")
+    counts = request_counts()
+    record("Metrics port 127.0.0.1:" + str(metrics_port) + " /metrics: " + "; ".join(counts))
+    if counts != ['nx_cache_requests_total{method="GET",outcome="hit"} 2',
+                  'nx_cache_requests_total{method="GET",outcome="miss"} 1',
+                  'nx_cache_requests_total{method="PUT",outcome="conflict"} 1',
+                  'nx_cache_requests_total{method="PUT",outcome="stored"} 1']:
+        raise AssertionError("Request counts do not match the driven hits, miss, store and conflict")
+    expect("GET", "/metrics", 404)
+    record("Metrics proof: counts by method/outcome on the metrics port; cache port answers 404 for /metrics")
     expect("GET", path, 401)
     expect("GET", path, 401, token="invalid")
     denied = path + "-denied"
@@ -137,10 +160,11 @@ try:
     process.send_signal(signal.SIGTERM)
     if process.wait(timeout=30) != 0:
         raise AssertionError("Server did not shut down cleanly")
+    env["METRICS_PORT"] = "0"
     process = subprocess.Popen([str(scratch / "server")], env=env, stdout=log, stderr=log, cwd=ROOT)
     deadline = time.monotonic() + 30
     while True:
-        addresses = re.findall(r'addr="?\[::\]:(\d+)', (scratch / "server.log").read_text())
+        addresses = re.findall(r'msg="Server running" addr="?\[::\]:(\d+)', (scratch / "server.log").read_text())
         if len(addresses) >= 2:
             base = f"{scheme}://localhost:{addresses[-1]}"
             break
@@ -149,6 +173,12 @@ try:
         time.sleep(0.1)
     expect("GET", path, 200, token=reader, expected=payload)
     record("Durability: same artifact bytes retrieved after cache-server restart")
+    try:
+        socket.create_connection(("127.0.0.1", metrics_port), timeout=3).close()
+    except ConnectionRefusedError:
+        record(f"METRICS_PORT=0 restart: connection to former metrics port {metrics_port} refused")
+    else:
+        raise AssertionError("Metrics port still listens with METRICS_PORT=0")
     command("docker", "stop", "--time", "5", container)
     expect("GET", "/health", 200, expected=b"OK")
     expect("GET", "/ready", 503, expected=b"Storage unavailable")
