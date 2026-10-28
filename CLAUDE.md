@@ -32,7 +32,8 @@ mise pins all tools and runs tasks (`mise run <task>`):
   builds the S3 client, optional TLS, `http.Server` (ReadHeaderTimeout 10s,
   IdleTimeout 120s), graceful shutdown on SIGTERM/SIGINT (25s drain).
 - `internal/server` — `New(Config) (http.Handler, error)`. Stdlib routing:
-  `GET /health`, `GET /ready` (HeadBucket, 2s), `PUT`/`GET /v1/cache/{hash}`.
+  `GET /health`, `GET /ready` (HeadBucket, 2s), `PUT`/`GET /v1/cache/{hash}`;
+  each `//` in the path becomes `/` before routing (no 307).
   Bearer auth with constant-time compare before reading body or touching
   storage; then the hash must match `^[0-9A-Za-z_-]{1,128}$` (else 400);
   read-only token may only GET. Uploads stream with Content-Length,

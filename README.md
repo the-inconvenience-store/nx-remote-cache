@@ -101,6 +101,10 @@ NX_SELF_HOSTED_REMOTE_CACHE_SERVER=http://your-server:3000
 NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN=your-secure-token
 ```
 
+A trailing slash in the server URL also works: the server changes each `//` in
+the request path to `/` before routing, without a redirect. The server has no
+base path setting; use an ingress to remove a path prefix.
+
 ### Trusted writers and read-only clients
 
 `NX_CACHE_ACCESS_TOKEN` is the trusted read/write credential.

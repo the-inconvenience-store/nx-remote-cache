@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -76,7 +77,33 @@ func New(ctx context.Context, cfg *Config) (http.Handler, error) {
 	mux.HandleFunc("GET /ready", h.ready)
 	mux.HandleFunc("PUT /v1/cache/{hash}", h.cacheRoute(h.upload))
 	mux.HandleFunc("GET /v1/cache/{hash}", h.cacheRoute(h.download))
-	return h.logRequests(mux), nil
+	return h.logRequests(collapseSlashes(mux)), nil
+}
+
+// collapseSlashes changes each run of slashes in the path to one slash before
+// routing. A server URL with a trailing slash makes Nx request
+// //v1/cache/<hash>; ServeMux would redirect it, and Nx would send the upload
+// body a second time. Encoded slashes (%2F) are not changed.
+func collapseSlashes(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		escaped := r.URL.EscapedPath()
+		if !strings.Contains(escaped, "//") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		for strings.Contains(escaped, "//") {
+			escaped = strings.ReplaceAll(escaped, "//", "/")
+		}
+		// Removing slashes keeps EscapedPath's valid escaping, so this cannot fail.
+		path, _ := url.PathUnescape(escaped)
+		collapsed := new(http.Request)
+		*collapsed = *r
+		collapsed.URL = new(url.URL)
+		*collapsed.URL = *r.URL
+		collapsed.URL.Path = path
+		collapsed.URL.RawPath = escaped
+		next.ServeHTTP(w, collapsed)
+	})
 }
 
 // validHash admits Nx's decimal hashes with room for future formats, and keeps

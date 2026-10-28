@@ -64,6 +64,31 @@ func TestDecimalNxHashAndLongestValidHashWork(t *testing.T) {
 	}
 }
 
+// A server URL with a trailing slash makes Nx request //v1/cache/<hash>. A
+// redirect would make Nx send the upload body a second time.
+func TestDoubleSlashPathsRouteWithoutRedirect(t *testing.T) {
+	t.Parallel()
+	s3 := newFakeS3(t)
+	h := newHandler(t, s3.URL, options{})
+
+	status, body := do(t, h, call{
+		method: http.MethodPut, path: "//v1/cache/abc", token: accessToken,
+		body: strings.NewReader("artifact"), length: 8,
+	})
+	expect(t, status, body, http.StatusOK, "Successfully uploaded")
+	if stored, _ := s3.object("abc"); string(stored) != "artifact" {
+		t.Fatalf("stored %q, want artifact", stored)
+	}
+	for _, path := range []string{"/v1/cache/abc", "//v1/cache/abc", "///v1//cache//abc"} {
+		status, body := do(t, h, call{method: http.MethodGet, path: path, token: accessToken})
+		expect(t, status, body, http.StatusOK, "artifact")
+	}
+	for _, path := range []string{"/v1/cache/missing", "//v1/cache/missing"} {
+		status, body := do(t, h, call{method: http.MethodGet, path: path, token: accessToken})
+		expect(t, status, body, http.StatusNotFound, "The record was not found")
+	}
+}
+
 func TestCacheRoutesRejectMissingOrInvalidTokens(t *testing.T) {
 	t.Parallel()
 	h := newHandler(t, newFakeS3(t).URL, options{})
