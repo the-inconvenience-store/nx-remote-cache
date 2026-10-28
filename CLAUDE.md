@@ -34,7 +34,8 @@ mise pins all tools and runs tasks (`mise run <task>`):
 - `internal/server` — `New(Config) (http.Handler, error)`. Stdlib routing:
   `GET /health`, `GET /ready` (HeadBucket, 2s), `PUT`/`GET /v1/cache/{hash}`.
   Bearer auth with constant-time compare before reading body or touching
-  storage; read-only token may only GET. Uploads stream with Content-Length,
+  storage; then the hash must match `^[0-9A-Za-z_-]{1,128}$` (else 400);
+  read-only token may only GET. Uploads stream with Content-Length,
   HeadObject then PutObject with `If-None-Match: *` (dropped per process once
   storage reports it unsupported). Storage failures: fail-open (default) →
   GET 404 / PUT 403; `NX_CACHE_FAIL_OPEN=false` → 503. Plain-text bodies.

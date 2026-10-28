@@ -46,11 +46,13 @@ Invalid configuration prints an error to stderr and exits with status 1. See
 | --- | --- | --- |
 | `GET /health` | none | 200 `OK` (process liveness; never touches storage) |
 | `GET /ready` | none | 200 `OK`, or 503 `Storage unavailable` when `HeadBucket` fails within 2s |
-| `PUT /v1/cache/{hash}` | access token | 200, 401, 403, 409, 411, 500, 503 |
-| `GET /v1/cache/{hash}` | either token | 200 (`application/octet-stream`), 401, 404, 503 |
+| `PUT /v1/cache/{hash}` | access token | 200, 400, 401, 403, 409, 411, 500, 503 |
+| `GET /v1/cache/{hash}` | either token | 200 (`application/octet-stream`), 400, 401, 404, 503 |
 
 Cache routes require `Authorization: Bearer <token>`; anything else returns 401
-`Missing or invalid authentication token`. Response bodies are plain text.
+`Missing or invalid authentication token`. A hash must match
+`^[0-9A-Za-z_-]{1,128}$`; any other hash returns 400 `Invalid hash` without a
+storage request. Response bodies are plain text.
 
 ## Running
 
@@ -227,7 +229,7 @@ Each request logs one `msg=request` line with `method`, `path`, `status`, and
 | `read-only` | `PUT` with the read-only token (403). |
 | `degraded` | Storage failed and the server answered a miss (404) or "not stored" (403); see [Cache outages](#cache-outages). |
 | `unauthorised` | Missing or invalid token (401). |
-| `bad-request` | The request is not valid, for example no `Content-Length` (411). |
+| `bad-request` | The request is not valid: an invalid hash (400) or no `Content-Length` (411). |
 | `error` | 503 when `NX_CACHE_FAIL_OPEN=false`, an upload the client aborted (500), or a download interrupted after it started. |
 
 Tokens are never logged.

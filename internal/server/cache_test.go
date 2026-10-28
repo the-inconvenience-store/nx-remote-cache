@@ -1,7 +1,9 @@
 package server_test
 
 import (
+	"bytes"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -28,6 +30,38 @@ func TestDownloadOfUnknownHashIsACacheMiss(t *testing.T) {
 	h := newHandler(t, newFakeS3(t).URL, options{})
 	status, body := get(t, h, "missing", accessToken)
 	expect(t, status, body, http.StatusNotFound, "The record was not found")
+}
+
+func TestInvalidHashIsRejectedWithoutTouchingStorage(t *testing.T) {
+	t.Parallel()
+	s3 := newFakeS3(t)
+	var logs bytes.Buffer
+	h := newHandler(t, s3.URL, options{logs: &logs})
+	for _, hash := range []string{"a%2F..%2Fb", "with.dot", "with%20space", strings.Repeat("1", 129)} {
+		status, body := get(t, h, hash, accessToken)
+		expect(t, status, body, http.StatusBadRequest, "Invalid hash")
+		status, body = put(t, h, hash, accessToken, "data")
+		expect(t, status, body, http.StatusBadRequest, "Invalid hash")
+		expectRequestLog(t, &logs, map[string]string{"method": "PUT", "status": "400", "outcome": "bad-request"})
+	}
+	if got := s3.calls.Load(); got != 0 {
+		t.Fatalf("storage received %d requests for invalid hashes, want 0", got)
+	}
+}
+
+func TestDecimalNxHashAndLongestValidHashWork(t *testing.T) {
+	t.Parallel()
+	h := newHandler(t, newFakeS3(t).URL, options{})
+	for _, hash := range []string{"11259871654684227838", strings.Repeat("Az09_-", 21) + "xy"} {
+		status, body := get(t, h, hash, accessToken)
+		expect(t, status, body, http.StatusNotFound, "The record was not found")
+		status, body = put(t, h, hash, accessToken, "data")
+		expect(t, status, body, http.StatusOK, "Successfully uploaded")
+		status, body = get(t, h, hash, accessToken)
+		expect(t, status, body, http.StatusOK, "data")
+		status, body = put(t, h, hash, accessToken, "again")
+		expect(t, status, body, http.StatusConflict, "Cannot override an existing record")
+	}
 }
 
 func TestCacheRoutesRejectMissingOrInvalidTokens(t *testing.T) {

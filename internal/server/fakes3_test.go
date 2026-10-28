@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/the-inconvenience-store/nx-remote-cache/internal/server"
@@ -23,11 +24,12 @@ const (
 )
 
 // fakeS3 is a minimal path-style S3 endpoint for one bucket. Override lets a
-// test replace the response for selected requests.
+// test replace the response for selected requests; calls counts every request.
 type fakeS3 struct {
 	mu       sync.Mutex
 	objects  map[string][]byte
 	override func(w http.ResponseWriter, r *http.Request) bool
+	calls    atomic.Int32
 	URL      string
 }
 
@@ -48,6 +50,7 @@ func (f *fakeS3) object(key string) ([]byte, bool) {
 }
 
 func (f *fakeS3) serve(w http.ResponseWriter, r *http.Request) {
+	f.calls.Add(1)
 	if f.override != nil && f.override(w, r) {
 		return
 	}

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -78,8 +79,13 @@ func New(ctx context.Context, cfg *Config) (http.Handler, error) {
 	return h.logRequests(mux), nil
 }
 
-// cacheRoute authenticates a cache request and records its hash, declared
-// length and access for the request log before serve runs.
+// validHash admits Nx's decimal hashes with room for future formats, and keeps
+// path separators and other characters out of S3 keys.
+var validHash = regexp.MustCompile(`^[0-9A-Za-z_-]{1,128}$`)
+
+// cacheRoute authenticates a cache request, rejects an invalid hash before any
+// storage call, and records the hash, declared length and access for the
+// request log before serve runs.
 func (h *handler) cacheRoute(serve func(http.ResponseWriter, *http.Request, *cacheRequest)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		req := cacheRequestFrom(r.Context())
@@ -89,6 +95,11 @@ func (h *handler) cacheRoute(serve func(http.ResponseWriter, *http.Request, *cac
 		if req.access == accessNone {
 			writeText(w, http.StatusUnauthorized, "Missing or invalid authentication token")
 			req.outcome = outcomeUnauthorised
+			return
+		}
+		if !validHash.MatchString(req.hash) {
+			writeText(w, http.StatusBadRequest, "Invalid hash")
+			req.outcome = outcomeBadRequest
 			return
 		}
 		serve(w, r, req)
