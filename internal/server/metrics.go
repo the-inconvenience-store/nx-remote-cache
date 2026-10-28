@@ -16,6 +16,8 @@ type metrics struct {
 	received    prometheus.Counter
 	sent        prometheus.Counter
 	s3Durations *prometheus.HistogramVec
+	// unconditionalUploads counts PutObject calls sent without If-None-Match.
+	unconditionalUploads prometheus.Counter
 	// all lists every collector above for register.
 	all collectorList
 }
@@ -44,6 +46,10 @@ func newMetrics() *metrics {
 				"A GetObject call ends when the response headers arrive.",
 			Buckets: prometheus.DefBuckets,
 		}, []string{"operation"}),
+		unconditionalUploads: factory.NewCounter(prometheus.CounterOpts{
+			Name: "nx_cache_unconditional_uploads_total",
+			Help: "Uploads sent to storage without If-None-Match because storage does not support conditional writes.",
+		}),
 	}
 	m.all = all
 	return m

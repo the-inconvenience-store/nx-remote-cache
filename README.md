@@ -268,7 +268,11 @@ conditional-write conflicts are treated as storage failures.
 
 If the storage explicitly reports that conditional writes are unsupported, that
 upload returns 403 `Cache storage unavailable; artifact not stored` (Nx treats
-it as non-fatal), a warning is logged, and later uploads in the same process are
+it as non-fatal), and later uploads in the same process are sent without the
+condition. The server keeps running but logs one warning at that switch
+(`Storage does not support conditional writes; later uploads are sent without
+If-None-Match and can overwrite each other`), and the
+`nx_cache_unconditional_uploads_total` [metric](#metrics) counts each upload
 sent without the condition. The `HeadObject` check is kept. No configuration is
 needed. Authentication, checksum, network, and unrelated storage errors remain
 errors. See
@@ -369,6 +373,7 @@ port has no authentication and no TLS; keep it on the internal network.
 | `nx_cache_received_bytes_total` | counter | — | Artifact bytes read from upload bodies; an aborted upload counts the bytes read before it stopped. |
 | `nx_cache_sent_bytes_total` | counter | — | Artifact bytes written to download responses; an interrupted download counts the bytes sent. |
 | `nx_cache_s3_request_duration_seconds` | histogram | `operation` | S3 API call duration (`HeadObject`, `PutObject`, `GetObject`, `HeadBucket`), including SDK retries. `PutObject` includes streaming the upload; `GetObject` ends when the response headers arrive, before the artifact streams. |
+| `nx_cache_unconditional_uploads_total` | counter | — | Uploads sent without `If-None-Match` because storage reported conditional writes unsupported; see [Upload compatibility](#upload-compatibility). Above 0, concurrent uploads of one hash can overwrite each other. |
 
 The standard Go runtime (`go_*`) and process (`process_*`) metrics are also
 served.
