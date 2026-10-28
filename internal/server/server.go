@@ -79,17 +79,15 @@ func New(ctx context.Context, cfg *Config) (http.Handler, error) {
 	if err := validate(cfg); err != nil {
 		return nil, err
 	}
-	h := &handler{cfg: *cfg, log: cfg.Logger}
+	h := &handler{cfg: *cfg, log: cfg.Logger, metrics: newMetrics(cfg.Metrics)}
 	if h.log == nil {
 		h.log = slog.Default()
 	}
-	client, err := newS3Client(ctx, cfg)
+	client, err := newS3Client(ctx, cfg, h.metrics.timeS3Calls)
 	if err != nil {
 		return nil, err
 	}
 	h.s3 = client
-	// Registered last, so a failed New leaves the registry untouched.
-	h.metrics = newMetrics(cfg.Metrics)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", health)

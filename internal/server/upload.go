@@ -8,6 +8,7 @@ import (
 
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func (h *handler) upload(w http.ResponseWriter, r *http.Request, req *cacheRequest) {
@@ -56,7 +57,7 @@ func (h *handler) objectExists(r *http.Request, hash string) (bool, error) {
 }
 
 func (h *handler) putObject(w http.ResponseWriter, r *http.Request, hash string) outcome {
-	body := &trackedBody{r: r.Body}
+	body := &trackedBody{r: r.Body, received: h.metrics.received}
 	input := &s3.PutObjectInput{
 		Bucket:        &h.cfg.Bucket,
 		Key:           &hash,
@@ -96,16 +97,19 @@ func (h *handler) putObject(w http.ResponseWriter, r *http.Request, hash string)
 	}
 }
 
-// trackedBody records a client-side read failure so it is not mistaken for a
-// storage failure. The SDK reads it from its transport goroutine.
+// trackedBody counts the bytes it reads and records a client-side read failure
+// so it is not mistaken for a storage failure. The SDK reads it from its
+// transport goroutine.
 type trackedBody struct {
-	r       io.Reader
-	mu      sync.Mutex
-	readErr error
+	r        io.Reader
+	received prometheus.Counter
+	mu       sync.Mutex
+	readErr  error
 }
 
 func (b *trackedBody) Read(p []byte) (int, error) {
 	n, err := b.r.Read(p)
+	b.received.Add(float64(n))
 	if err != nil && !errors.Is(err, io.EOF) {
 		b.mu.Lock()
 		b.readErr = err

@@ -59,12 +59,12 @@ def expect(method, path, status, token=None, body=None, expected=None):
     return payload
 
 
-def request_counts():
+def scrape(prefix):
     with urllib.request.urlopen(f"http://127.0.0.1:{metrics_port}/metrics", timeout=15) as response:
         if response.status != 200:
             raise AssertionError(f"GET /metrics on the metrics port: expected 200, got {response.status}")
         text = response.read().decode()
-    return sorted(line for line in text.splitlines() if line.startswith("nx_cache_requests_total{"))
+    return sorted(line for line in text.splitlines() if line.startswith(prefix))
 
 
 try:
@@ -142,15 +142,26 @@ try:
     expect("PUT", path, 409, token=trusted, body=b"replacement")
     expect("GET", path, 200, token=reader, expected=payload)
     record("Cache proof: stored bytes survive a rejected overwrite and are readable by the read-only consumer")
-    counts = request_counts()
+    counts = scrape("nx_cache_requests_total{")
     record("Metrics port 127.0.0.1:" + str(metrics_port) + " /metrics: " + "; ".join(counts))
     if counts != ['nx_cache_requests_total{method="GET",outcome="hit"} 2',
                   'nx_cache_requests_total{method="GET",outcome="miss"} 1',
                   'nx_cache_requests_total{method="PUT",outcome="conflict"} 1',
                   'nx_cache_requests_total{method="PUT",outcome="stored"} 1']:
         raise AssertionError("Request counts do not match the driven hits, miss, store and conflict")
+    # One stored upload was read; the conflicting one was refused before its body.
+    transferred = scrape("nx_cache_received_bytes_total ") + scrape("nx_cache_sent_bytes_total ")
+    record("Bytes: " + "; ".join(transferred))
+    if transferred != [f"nx_cache_received_bytes_total {len(payload)}",
+                       f"nx_cache_sent_bytes_total {2 * len(payload)}"]:
+        raise AssertionError("Byte counters do not match one upload and two downloads of the payload")
+    durations = scrape("nx_cache_s3_request_duration_seconds_count{")
+    record("S3 call counts: " + "; ".join(durations))
+    operations = {re.search(r'operation="(\w+)"', line)[1] for line in durations}
+    if not {"HeadObject", "PutObject", "GetObject", "HeadBucket"} <= operations:
+        raise AssertionError("S3 duration histogram lacks a series for a driven operation")
     expect("GET", "/metrics", 404)
-    record("Metrics proof: counts by method/outcome on the metrics port; cache port answers 404 for /metrics")
+    record("Metrics proof: request, byte and S3 duration metrics on the metrics port; cache port 404s /metrics")
     expect("GET", path, 401)
     expect("GET", path, 401, token="invalid")
     denied = path + "-denied"

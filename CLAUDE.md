@@ -52,7 +52,9 @@ mise pins all tools and runs tasks (`mise run <task>`):
 - Metrics (`internal/server/metrics.go`): `newMetrics` registers every
   collector with `Config.Metrics` (nil → unregistered); add new metrics there.
   `nx_cache_requests_total{method,outcome}` counts cache requests; never label
-  by hash.
+  by hash. Byte counters count bytes actually read/written (`trackedBody`,
+  download copy), not declared lengths. S3 call durations come from one SDK
+  Initialize middleware (`timeS3Calls`) labelled by operation name.
 - `internal` must not import `cmd`.
 
 ## Testing
