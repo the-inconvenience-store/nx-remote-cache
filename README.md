@@ -37,6 +37,7 @@ Invalid configuration prints an error to stderr and exits with status 1. See
 | `AWS_ACCESS_KEY_ID` | no | unset | Set both AWS keys or neither. Neither → AWS SDK default credential chain. |
 | `AWS_SECRET_ACCESS_KEY` | no | unset | See above. |
 | `NX_CACHE_FAIL_OPEN` | no | `true` | `true` or `false`; anything else is an error. See [Cache outages](#cache-outages). |
+| `NX_CACHE_MAX_ARTIFACT_BYTES` | no | `0` (no limit) | Largest upload `Content-Length` in bytes; a whole number of 0 or more, anything else is an error. A larger upload gets 403 and is not stored. See [Streaming uploads](#streaming-uploads). |
 | `TLS_CERT_PATH` | no | unset | PEM certificate. Set both TLS paths or neither; both → HTTPS. |
 | `TLS_KEY_PATH` | no | unset | PEM private key. |
 
@@ -142,6 +143,13 @@ request, nothing is stored, and the server returns 500. A retry requires a fresh
 client request. Memory use scales with concurrent stream buffers, not artifact
 size.
 
+Set `NX_CACHE_MAX_ARTIFACT_BYTES` to limit the artifact size. The server
+compares the limit with `Content-Length` before it reads the body or contacts
+storage. A larger upload returns 403 `Artifact exceeds the maximum size;
+artifact not stored`, and nothing is stored. The status is 403, not 413,
+because Nx continues the run after a 403 but stops it on 413. An upload exactly
+at the limit is accepted. The default, `0`, sets no limit.
+
 ## Upload compatibility
 
 Uploads first check for an existing object with `HeadObject` (409 if present),
@@ -234,6 +242,7 @@ Each request logs one `msg=request` line with `method`, `path`, `status`, and
 | `degraded` | Storage failed and the server answered a miss (404) or "not stored" (403); see [Cache outages](#cache-outages). |
 | `unauthorised` | Missing or invalid token (401). |
 | `bad-request` | The request is not valid: an invalid hash (400) or no `Content-Length` (411). |
+| `too-large` | `PUT` with a `Content-Length` over `NX_CACHE_MAX_ARTIFACT_BYTES` (403). |
 | `error` | 503 when `NX_CACHE_FAIL_OPEN=false`, an upload the client aborted (500), or a download interrupted after it started. |
 
 Tokens are never logged.

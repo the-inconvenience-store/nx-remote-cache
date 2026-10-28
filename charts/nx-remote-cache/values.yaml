@@ -53,6 +53,9 @@ config:
   # "not stored" (PUT 403) so Nx keeps building. Set false to return 503
   # and fail the Nx run instead.
   failOpen: true
+  # Largest upload Content-Length in bytes (NX_CACHE_MAX_ARTIFACT_BYTES). A
+  # larger upload gets 403 and is not stored; Nx continues. 0 means no limit.
+  maxArtifactBytes: 0
   awsRegion: us-east-1
   s3:
     bucketName: nx-cloud

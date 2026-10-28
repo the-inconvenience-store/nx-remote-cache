@@ -32,17 +32,19 @@ mise pins all tools and runs tasks (`mise run <task>`):
   builds the S3 client, optional TLS, `http.Server` (ReadHeaderTimeout 10s,
   IdleTimeout 120s), graceful shutdown on SIGTERM/SIGINT (25s drain).
 - `internal/server` — `New(Config) (http.Handler, error)`. Stdlib routing:
-  `GET /health`, `GET /ready` (HeadBucket, 2s), `PUT`/`GET /v1/cache/{hash}`;
-  each `//` in the path becomes `/` before routing (no 307).
+  `GET /health`, `GET /ready` (HeadBucket, 2s), `PUT`/`GET /v1/cache/{hash}`.
   Bearer auth with constant-time compare before reading body or touching
-  storage; then the hash must match `^[0-9A-Za-z_-]{1,128}$` (else 400);
-  read-only token may only GET. Uploads stream with Content-Length,
+  storage; read-only token may only GET. Uploads stream with Content-Length,
   HeadObject then PutObject with `If-None-Match: *` (dropped per process once
   storage reports it unsupported). Storage failures: fail-open (default) →
   GET 404 / PUT 403; `NX_CACHE_FAIL_OPEN=false` → 503. Plain-text bodies.
-  Each cache request records one `outcome` (`requestlog.go`) on its request log
-  line with `hash`, `bytes`, `access`; never token text.
 - `internal` must not import `cmd`.
+- Cache request checks (`internal/server`): each `//` in the path becomes `/`
+  before routing (no 307); after auth the hash must match
+  `^[0-9A-Za-z_-]{1,128}$` (else 400); an upload whose Content-Length exceeds
+  `NX_CACHE_MAX_ARTIFACT_BYTES` gets 403 before its body is read. Each cache
+  request records one `outcome` (`requestlog.go`) on its request log line with
+  `hash`, `bytes`, `access`; never token text.
 
 ## Testing
 
@@ -60,7 +62,8 @@ Required: `NX_CACHE_ACCESS_TOKEN`. Optional: `NX_CACHE_READ_ONLY_TOKEN`,
 `PORT` (3000), `AWS_REGION` (us-east-1), `S3_BUCKET_NAME` (nx-cloud),
 `S3_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (both or
 neither; neither → default credential chain), `NX_CACHE_FAIL_OPEN` (true),
-`TLS_CERT_PATH` + `TLS_KEY_PATH` (both or neither). See README for rules.
+`TLS_CERT_PATH` + `TLS_KEY_PATH` (both or neither), `NX_CACHE_MAX_ARTIFACT_BYTES`
+(0 = no limit). See README for rules.
 
 ## CI
 

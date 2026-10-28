@@ -23,6 +23,11 @@ func (h *handler) upload(w http.ResponseWriter, r *http.Request, req *cacheReque
 		req.outcome = outcomeBadRequest
 		return
 	}
+	if h.cfg.MaxArtifactSize > 0 && r.ContentLength > h.cfg.MaxArtifactSize {
+		writeText(w, http.StatusForbidden, "Artifact exceeds the maximum size; artifact not stored")
+		req.outcome = outcomeTooLarge
+		return
+	}
 
 	exists, err := h.objectExists(r, req.hash)
 	if err != nil {

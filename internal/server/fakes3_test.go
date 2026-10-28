@@ -109,9 +109,10 @@ func writeS3Error(w http.ResponseWriter, status int, code, message string) {
 }
 
 type options struct {
-	readOnly bool
-	failOpen *bool
-	logs     *bytes.Buffer
+	readOnly        bool
+	failOpen        *bool
+	logs            *bytes.Buffer
+	maxArtifactSize int64
 }
 
 func newHandler(t *testing.T, endpoint string, opts options) http.Handler {
@@ -137,6 +138,7 @@ func newHandler(t *testing.T, endpoint string, opts options) http.Handler {
 	if opts.readOnly {
 		cfg.ReadOnlyToken = readOnlyToken
 	}
+	cfg.MaxArtifactSize = opts.maxArtifactSize
 	h, err := server.New(context.Background(), &cfg)
 	if err != nil {
 		t.Fatalf("server.New: %v", err)

@@ -42,6 +42,10 @@ type Config struct {
 	// empty the AWS SDK default credential chain is used.
 	AccessKeyID     string
 	SecretAccessKey string
+	// MaxArtifactSize, when positive, is the largest upload Content-Length in
+	// bytes. A larger upload gets 403 before its body is read; Nx continues on
+	// 403 but stops the run on 413.
+	MaxArtifactSize int64
 	// FailOpen degrades storage failures into cache misses (GET 404) and
 	// non-fatal "not stored" responses (PUT 403) instead of 503.
 	FailOpen bool
