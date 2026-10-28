@@ -29,7 +29,10 @@ mise pins all tools and runs tasks (`mise run <task>`):
 
 - `cmd/nx-remote-cache` — reads and validates env config (exit 1 on error),
   builds the S3 client, optional TLS, `http.Server` (ReadHeaderTimeout 10s,
-  IdleTimeout 120s), graceful shutdown on SIGTERM/SIGINT (25s drain).
+  IdleTimeout 120s), graceful shutdown on SIGTERM/SIGINT (25s drain). Unless
+  `METRICS_PORT=0`, a second plain-HTTP server serves only `GET /metrics` from
+  a dedicated Prometheus registry (plus Go/process collectors) and shuts down
+  with the cache server.
 - `internal/server` — `New(Config) (http.Handler, error)`. Stdlib routing:
   `GET /health`, `GET /ready` (HeadBucket, 2s), `PUT`/`GET /v1/cache/{hash}`.
   Bearer auth with constant-time compare against every listed token before
@@ -46,6 +49,10 @@ mise pins all tools and runs tasks (`mise run <task>`):
   `NX_CACHE_MAX_ARTIFACT_BYTES` gets 403 before its body is read. Each cache
   request records one `outcome` (`requestlog.go`) on its request log line with
   `hash`, `bytes`, `access`; never token text.
+- Metrics (`internal/server/metrics.go`): `newMetrics` registers every
+  collector with `Config.Metrics` (nil → unregistered); add new metrics there.
+  `nx_cache_requests_total{method,outcome}` counts cache requests; never label
+  by hash.
 - `internal` must not import `cmd`.
 
 ## Testing
@@ -63,7 +70,7 @@ mise pins all tools and runs tasks (`mise run <task>`):
 
 Required: `NX_CACHE_ACCESS_TOKEN`. Optional: `NX_CACHE_READ_ONLY_TOKEN` (both
 comma-separated token lists; empty item, duplicate or overlap → startup error),
-`PORT` (3000), `AWS_REGION` (us-east-1), `S3_BUCKET_NAME` (nx-cloud),
+`PORT` (3000), `METRICS_PORT` (9090; 0 = off), `AWS_REGION` (us-east-1), `S3_BUCKET_NAME` (nx-cloud),
 `S3_ENDPOINT_URL`, `S3_FORCE_PATH_STYLE` (`true`|`false`; unset → path-style
 only with an endpoint), `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (both or
 neither; neither → default credential chain), `NX_CACHE_FAIL_OPEN` (true),

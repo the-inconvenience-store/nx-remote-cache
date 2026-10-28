@@ -17,6 +17,7 @@ lives in [`docs/nx-remote-cache.openapi.json`](docs/nx-remote-cache.openapi.json
 - Optional read-only token for untrusted CI jobs.
 - Graceful degradation during storage outages so Nx keeps building.
 - `/health` liveness and `/ready` storage-readiness endpoints.
+- Prometheus metrics on a separate port.
 - Static AWS keys or the AWS default credential chain (IRSA, instance profile).
 - Optional HTTPS; distroless multi-arch image; Helm chart.
 
@@ -31,6 +32,7 @@ Invalid configuration prints an error to stderr and exits with status 1. See
 | `NX_CACHE_ACCESS_TOKEN` | yes | — | Trusted read/write tokens: a comma-separated list. Each token is nonempty, without whitespace. |
 | `NX_CACHE_READ_ONLY_TOKEN` | no | unset | Download-only tokens: a comma-separated list. If set (even empty), each token must be nonempty, contain no whitespace, and not appear in `NX_CACHE_ACCESS_TOKEN`. |
 | `PORT` | no | `3000` | Listen port. |
+| `METRICS_PORT` | no | `9090` | Port for Prometheus `/metrics` (plain HTTP); `0` turns metrics off. An integer from 0 to 65535; anything else, including empty, is an error. See [Metrics](#metrics). |
 | `AWS_REGION` | no | `us-east-1` | |
 | `S3_BUCKET_NAME` | no | `nx-cloud` | |
 | `S3_ENDPOINT_URL` | no | unset (AWS S3) | Custom S3-compatible endpoint. |
@@ -347,6 +349,21 @@ Each request logs one `msg=request` line with `method`, `path`, `status`, and
 | `error` | 503 when `NX_CACHE_FAIL_OPEN=false`, an upload the client aborted (500), or a download interrupted after it started. |
 
 Tokens are never logged.
+
+## Metrics
+
+The server serves Prometheus metrics at `GET /metrics` on `METRICS_PORT`
+(default 9090), apart from the cache port, so a public ingress for the cache
+does not show them. The cache port answers 404 for `/metrics`. The metrics
+port has no authentication and no TLS; keep it on the internal network.
+`METRICS_PORT=0` turns metrics off, and no metrics port listens.
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `nx_cache_requests_total` | counter | `method`, `outcome` | Cache requests by HTTP method and [outcome](#request-log). |
+
+The standard Go runtime (`go_*`) and process (`process_*`) metrics are also
+served.
 
 ## Development
 

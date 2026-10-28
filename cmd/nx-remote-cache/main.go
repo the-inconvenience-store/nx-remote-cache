@@ -17,6 +17,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"github.com/the-inconvenience-store/nx-remote-cache/internal/server"
 )
 
@@ -26,10 +30,13 @@ const (
 	// shutdownTimeout drains in-flight requests within Kubernetes' default 30s grace period.
 	shutdownTimeout = 25 * time.Second
 	maxPort         = 65535
+	// defaultMetricsPort is used when METRICS_PORT is unset.
+	defaultMetricsPort = 9090
 )
 
 var (
 	errPort           = errors.New("PORT must be an integer between 0 and 65535")
+	errMetricsPort    = errors.New("METRICS_PORT must be an integer between 0 and 65535")
 	errFailOpen       = errors.New(`NX_CACHE_FAIL_OPEN must be "true" or "false"`)
 	errForcePathStyle = errors.New(`S3_FORCE_PATH_STYLE must be "true" or "false"`)
 	errTLSPair        = errors.New("TLS misconfiguration")
@@ -38,9 +45,11 @@ var (
 type lookupFunc func(key string) (string, bool)
 
 type settings struct {
-	port   int
-	server server.Config
-	tls    *tls.Config
+	port int
+	// metricsPort serves /metrics; 0 turns metrics off.
+	metricsPort int
+	server      server.Config
+	tls         *tls.Config
 }
 
 func main() {
@@ -62,11 +71,23 @@ func run(ctx context.Context, lookup lookupFunc, logOut io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("listen on port %d: %w", s.port, err)
 	}
-	return serve(ctx, &s, listener, logOut)
+	var metricsListener net.Listener
+	if s.metricsPort != 0 {
+		metricsListener, err = new(net.ListenConfig).Listen(ctx, "tcp", ":"+strconv.Itoa(s.metricsPort))
+		if err != nil {
+			_ = listener.Close()
+			return fmt.Errorf("listen on metrics port %d: %w", s.metricsPort, err)
+		}
+	}
+	return serve(ctx, &s, listener, metricsListener, logOut)
 }
 
 func loadSettings(lookup lookupFunc) (settings, error) {
 	port, err := parsePort(valueOr(lookup, "PORT", "3000"))
+	if err != nil {
+		return settings{}, err
+	}
+	metricsPort, err := parseMetricsPort(lookup)
 	if err != nil {
 		return settings{}, err
 	}
@@ -95,8 +116,9 @@ func loadSettings(lookup lookupFunc) (settings, error) {
 	keyID, _ := lookup("AWS_ACCESS_KEY_ID")
 	secret, _ := lookup("AWS_SECRET_ACCESS_KEY")
 	return settings{
-		port: port,
-		tls:  tlsConfig,
+		port:        port,
+		metricsPort: metricsPort,
+		tls:         tlsConfig,
 		server: server.Config{
 			AccessTokens:    splitTokens(access),
 			ReadOnlyTokens:  readOnlyTokens,
@@ -140,6 +162,19 @@ func parsePort(raw string) (int, error) {
 	port, err := strconv.Atoi(raw)
 	if err != nil || port < 0 || port > maxPort {
 		return 0, errPort
+	}
+	return port, nil
+}
+
+// parseMetricsPort defaults only when the variable is unset; an empty value is an error.
+func parseMetricsPort(lookup lookupFunc) (int, error) {
+	value, ok := lookup("METRICS_PORT")
+	if !ok {
+		return defaultMetricsPort, nil
+	}
+	port, err := parsePort(value)
+	if err != nil {
+		return 0, errMetricsPort
 	}
 	return port, nil
 }
@@ -209,38 +244,70 @@ func loadTLS(lookup lookupFunc) (*tls.Config, error) {
 	return &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, nil
 }
 
-func serve(ctx context.Context, s *settings, listener net.Listener, logOut io.Writer) error {
+// serve runs the cache server on listener and, unless metricsListener is nil,
+// the metrics server on metricsListener. On ctx cancellation or a server
+// failure it drains both servers.
+func serve(ctx context.Context, s *settings, listener, metricsListener net.Listener, logOut io.Writer) error {
 	logger := slog.New(slog.NewTextHandler(logOut, nil))
 	s.server.Logger = logger
+	var registry *prometheus.Registry
+	if metricsListener != nil {
+		registry = prometheus.NewRegistry()
+		registry.MustRegister(
+			collectors.NewGoCollector(),
+			collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+		)
+		s.server.Metrics = registry
+	}
 	handler, err := server.New(ctx, &s.server)
 	if err != nil {
 		_ = listener.Close()
+		if metricsListener != nil {
+			_ = metricsListener.Close()
+		}
 		return fmt.Errorf("configure server: %w", err)
 	}
-	srv := &http.Server{
+	if s.tls != nil {
+		listener = tls.NewListener(listener, s.tls)
+	}
+	servers := []*http.Server{newHTTPServer(handler, logger)}
+	listeners := []net.Listener{listener}
+	logger.InfoContext(ctx, "Server running", "addr", listener.Addr().String(), "https", s.tls != nil)
+	if metricsListener != nil {
+		mux := http.NewServeMux()
+		mux.Handle("GET /metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
+		servers = append(servers, newHTTPServer(mux, logger))
+		listeners = append(listeners, metricsListener)
+		logger.InfoContext(ctx, "Metrics server running", "addr", metricsListener.Addr().String())
+	}
+	serveErr := make(chan error, len(servers))
+	for i, srv := range servers {
+		go func() { serveErr <- srv.Serve(listeners[i]) }()
+	}
+
+	var result error
+	select {
+	case err := <-serveErr:
+		result = fmt.Errorf("serve: %w", err)
+	case <-ctx.Done():
+		logger.InfoContext(ctx, "Shutting down; draining in-flight requests")
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+	defer cancel()
+	// The cache server drains first, so the metrics port stays scrapable meanwhile.
+	for _, srv := range servers {
+		if err := srv.Shutdown(shutdownCtx); err != nil && result == nil {
+			result = fmt.Errorf("graceful shutdown: %w", err)
+		}
+	}
+	return result
+}
+
+func newHTTPServer(handler http.Handler, logger *slog.Logger) *http.Server {
+	return &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
 	}
-	if s.tls != nil {
-		listener = tls.NewListener(listener, s.tls)
-	}
-	logger.InfoContext(ctx, "Server running", "addr", listener.Addr().String(), "https", s.tls != nil)
-
-	serveErr := make(chan error, 1)
-	go func() { serveErr <- srv.Serve(listener) }()
-	select {
-	case err := <-serveErr:
-		return fmt.Errorf("serve: %w", err)
-	case <-ctx.Done():
-	}
-
-	logger.InfoContext(ctx, "Shutting down; draining in-flight requests")
-	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("graceful shutdown: %w", err)
-	}
-	return nil
 }
