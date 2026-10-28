@@ -99,10 +99,25 @@ the AWS env refs are `optional: true`.
 
 The server serves Prometheus metrics at `/metrics` on `config.metricsPort`
 (`METRICS_PORT`, default `9090`), exposed as the container port named
-`metrics`. The Service does not include it, so an Ingress for the cache does
-not show it; scrape the pods directly. The port is plain HTTP without
-authentication, even with `tls.enabled`. Set `config.metricsPort` to `0` to
-turn metrics off.
+`metrics`. By default the Kubernetes Service does not expose it. Set
+`serviceMonitor.enabled: true` to add the metrics port to the Service and
+create a Prometheus Operator `ServiceMonitor` targeting `/metrics`; the
+`monitoring.coreos.com/v1` CRD must be installed. The monitor carries the
+chart's standard labels, which the Prometheus resource must select. The metrics
+port must be nonzero when ServiceMonitor is enabled. Set `config.metricsPort`
+to `0` to turn metrics off.
+
+## Availability and pod security
+
+Set `podDisruptionBudget.enabled: true` to create a `policy/v1`
+PodDisruptionBudget with `minAvailable: 1`. With the default single replica,
+this prevents voluntary eviction while that pod is the only available pod;
+run multiple replicas if voluntary disruptions must proceed.
+
+`podSecurityContext` and `securityContext` accept Kubernetes security context
+fields. The values file includes a commented restricted example that runs as
+non-root, uses `RuntimeDefault` seccomp, disables privilege escalation, uses a
+read-only root filesystem, and drops all Linux capabilities.
 
 ## Serving over HTTPS
 
@@ -136,7 +151,8 @@ helm install nx-cache oci://ghcr.io/the-inconvenience-store/charts/nx-remote-cac
 | `replicaCount` | `1` | Run more than one for availability |
 | `service.type` | `ClusterIP` | |
 | `service.port` | `3000` | |
-| `serviceAccount.create` | `true` | |
+| `podDisruptionBudget.enabled` | `false` | Create a PDB with `minAvailable: 1` |
+| `serviceMonitor.enabled` | `false` | Expose metrics through the Service and create a Prometheus Operator ServiceMonitor |
 | `serviceAccount.name` | `""` | |
 | `serviceAccount.annotations` | `{}` | IRSA / Workload Identity annotations |
 | `probes.liveness.enabled` | `true` | Liveness probe on `/health` |
