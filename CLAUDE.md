@@ -38,6 +38,8 @@ mise pins all tools and runs tasks (`mise run <task>`):
   HeadObject then PutObject with `If-None-Match: *` (dropped per process once
   storage reports it unsupported). Storage failures: fail-open (default) →
   GET 404 / PUT 403; `NX_CACHE_FAIL_OPEN=false` → 503. Plain-text bodies.
+  Each cache request records one `outcome` (`requestlog.go`) on its request log
+  line with `hash`, `bytes`, `access`; never token text.
 - `internal` must not import `cmd`.
 
 ## Testing

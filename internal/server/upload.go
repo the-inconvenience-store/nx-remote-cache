@@ -10,34 +10,32 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-func (h *handler) upload(w http.ResponseWriter, r *http.Request) {
-	switch h.access(r) {
-	case accessNone:
-		writeText(w, http.StatusUnauthorized, "Missing or invalid authentication token")
-		return
-	case accessRead:
+func (h *handler) upload(w http.ResponseWriter, r *http.Request, req *cacheRequest) {
+	if req.access == accessRead {
 		writeText(w, http.StatusForbidden, "Read-only credentials cannot upload artifacts")
+		req.outcome = outcomeReadOnly
 		return
-	case accessWrite:
 	}
 	// Go reports a request with neither Content-Length nor Transfer-Encoding as
 	// length 0, so the header itself must be present.
 	if r.ContentLength < 0 || r.Header.Get("Content-Length") == "" {
 		writeText(w, http.StatusLengthRequired, "Content-Length header is required")
+		req.outcome = outcomeBadRequest
 		return
 	}
+	req.bytes = r.ContentLength
 
-	hash := r.PathValue("hash")
-	exists, err := h.objectExists(r, hash)
+	exists, err := h.objectExists(r, req.hash)
 	if err != nil {
-		h.storageFailure(w, r, err)
+		req.outcome = h.storageFailure(w, r, err)
 		return
 	}
 	if exists {
 		writeText(w, http.StatusConflict, "Cannot override an existing record")
+		req.outcome = outcomeConflict
 		return
 	}
-	h.putObject(w, r, hash)
+	req.outcome = h.putObject(w, r, req.hash)
 }
 
 // objectExists is a fast duplicate check. It is not race-free; the conditional
@@ -53,7 +51,7 @@ func (h *handler) objectExists(r *http.Request, hash string) (bool, error) {
 	return false, err
 }
 
-func (h *handler) putObject(w http.ResponseWriter, r *http.Request, hash string) {
+func (h *handler) putObject(w http.ResponseWriter, r *http.Request, hash string) outcome {
 	body := &trackedBody{r: r.Body}
 	input := &s3.PutObjectInput{
 		Bucket:        &h.cfg.Bucket,
@@ -74,19 +72,23 @@ func (h *handler) putObject(w http.ResponseWriter, r *http.Request, hash string)
 	switch {
 	case err == nil:
 		writeText(w, http.StatusOK, "Successfully uploaded")
+		return outcomeStored
 	case body.failed():
 		h.log.WarnContext(r.Context(), "Upload aborted by client", "hash", hash, "error", body.err())
 		writeText(w, http.StatusInternalServerError, "Internal server error")
+		return outcomeError
 	case apiErrorCode(err) == "PreconditionFailed":
 		writeText(w, http.StatusConflict, "Cannot override an existing record")
+		return outcomeConflict
 	case conditional && unsupportedCondition(err):
 		h.conditionalUnsupported.Store(true)
 		h.log.WarnContext(r.Context(),
 			"Storage does not support conditional PUT; later uploads are not atomic",
 			"hash", hash, "error", err)
 		writeNotStored(w)
+		return outcomeDegraded
 	default:
-		h.storageFailure(w, r, err)
+		return h.storageFailure(w, r, err)
 	}
 }
 

@@ -73,9 +73,25 @@ func New(ctx context.Context, cfg *Config) (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /ready", h.ready)
-	mux.HandleFunc("PUT /v1/cache/{hash}", h.upload)
-	mux.HandleFunc("GET /v1/cache/{hash}", h.download)
+	mux.HandleFunc("PUT /v1/cache/{hash}", h.cacheRoute(h.upload))
+	mux.HandleFunc("GET /v1/cache/{hash}", h.cacheRoute(h.download))
 	return h.logRequests(mux), nil
+}
+
+// cacheRoute authenticates a cache request and records its hash and access for
+// the request log before serve runs.
+func (h *handler) cacheRoute(serve func(http.ResponseWriter, *http.Request, *cacheRequest)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		req := cacheRequestFrom(r.Context())
+		req.hash = r.PathValue("hash")
+		req.access = h.access(r)
+		if req.access == accessNone {
+			writeText(w, http.StatusUnauthorized, "Missing or invalid authentication token")
+			req.outcome = outcomeUnauthorised
+			return
+		}
+		serve(w, r, req)
+	}
 }
 
 func validate(cfg *Config) error {
@@ -186,17 +202,4 @@ func (s *statusRecorder) Write(p []byte) (int, error) {
 
 func (s *statusRecorder) Unwrap() http.ResponseWriter {
 	return s.ResponseWriter
-}
-
-func (h *handler) logRequests(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		rec := &statusRecorder{ResponseWriter: w}
-		next.ServeHTTP(rec, r)
-		h.log.InfoContext(r.Context(), "request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", rec.status,
-			"duration", time.Since(start))
-	})
 }

@@ -206,6 +206,32 @@ The server cannot protect against these failures:
 - Nx has no setting that makes cache errors non-fatal. `skipRemoteCache`
   disables the remote cache entirely.
 
+## Request log
+
+Each request logs one `msg=request` line with `method`, `path`, `status`, and
+`duration`. Cache requests add:
+
+- `hash`: the requested hash.
+- `bytes`: the artifact size; the declared `Content-Length` of an upload, or the
+  bytes sent for a download.
+- `access`: `rw` for the access token, `ro` for the read-only token; absent when
+  the token is missing or invalid.
+- `outcome`: what happened to the request.
+
+| Outcome | Meaning |
+| --- | --- |
+| `hit` | `GET` sent the artifact. |
+| `miss` | `GET` found no artifact (404). |
+| `stored` | `PUT` stored the artifact. |
+| `conflict` | `PUT` for a hash that already exists (409). |
+| `read-only` | `PUT` with the read-only token (403). |
+| `degraded` | Storage failed and the server answered a miss (404) or "not stored" (403); see [Cache outages](#cache-outages). |
+| `unauthorised` | Missing or invalid token (401). |
+| `bad-request` | The request is not valid, for example no `Content-Length` (411). |
+| `error` | 503 when `NX_CACHE_FAIL_OPEN=false`, an upload the client aborted (500), or a download interrupted after it started. |
+
+Tokens are never logged.
+
 ## Development
 
 [mise](https://mise.jdx.dev) pins every tool (Go, golangci-lint, lefthook,
