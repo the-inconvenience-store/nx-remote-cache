@@ -60,9 +60,11 @@ neither; neither → default credential chain), `NX_CACHE_FAIL_OPEN` (true),
 
 ## CI
 
-GitHub Actions via jdx/mise-action: check, integration, e2e, cog check on PR
-commits, helm lint, then multi-arch distroless image and chart publish to GHCR.
-Dependabot weekly for gomod, docker, github-actions.
+`.github/workflows/main.yml` is dormant during the rewrite: `workflow_dispatch`
+only, and the workflow is disabled in GitHub. Jobs (via jdx/mise-action):
+check, integration, e2e, cog check on PR commits, helm lint, then multi-arch
+distroless image and chart publish to GHCR. Restore push/PR/release triggers
+and add Dependabot (gomod, docker, github-actions) once publishing is set up.
 
 ## Conventions
 
