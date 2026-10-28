@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Configuration errors returned by New.
@@ -58,12 +59,16 @@ type Config struct {
 	// non-fatal "not stored" responses (PUT 403) instead of 503.
 	FailOpen bool
 	Logger   *slog.Logger
+	// Metrics receives the server's collectors. Nil leaves them unregistered.
+	// New panics if they are already registered with it.
+	Metrics prometheus.Registerer
 }
 
 type handler struct {
-	cfg Config
-	s3  *s3.Client
-	log *slog.Logger
+	cfg     Config
+	s3      *s3.Client
+	log     *slog.Logger
+	metrics *metrics
 	// conditionalUnsupported records that storage rejected If-None-Match, so
 	// later uploads in this process are sent unconditionally.
 	conditionalUnsupported atomic.Bool
@@ -83,13 +88,15 @@ func New(ctx context.Context, cfg *Config) (http.Handler, error) {
 		return nil, err
 	}
 	h.s3 = client
+	// Registered last, so a failed New leaves the registry untouched.
+	h.metrics = newMetrics(cfg.Metrics)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /ready", h.ready)
 	mux.HandleFunc("PUT /v1/cache/{hash}", h.cacheRoute(h.upload))
 	mux.HandleFunc("GET /v1/cache/{hash}", h.cacheRoute(h.download))
-	return h.logRequests(collapseSlashes(mux)), nil
+	return h.logRequests(h.countRequests(collapseSlashes(mux))), nil
 }
 
 // collapseSlashes changes each run of slashes in the path to one slash before

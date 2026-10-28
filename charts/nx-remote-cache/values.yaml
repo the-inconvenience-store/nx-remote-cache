@@ -49,6 +49,9 @@ probes:
 # Non-secret configuration mapped to env vars in the container.
 config:
   port: 3000
+  # Port for Prometheus /metrics (METRICS_PORT), plain HTTP without auth and
+  # not exposed by the Service. 0 turns metrics off.
+  metricsPort: 9090
   # When storage fails, degrade to a cache miss (GET 404) or non-fatal
   # "not stored" (PUT 403) so Nx keeps building. Set false to return 503
   # and fail the Nx run instead.

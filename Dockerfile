@@ -25,7 +25,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=build /out/nx-remote-cache /nx-remote-cache
 
-EXPOSE 3000
+EXPOSE 3000 9090
 # distroless `nonroot` (65532), numeric so Kubernetes runAsNonRoot can verify it.
 USER 65532:65532
 ENTRYPOINT ["/nx-remote-cache"]

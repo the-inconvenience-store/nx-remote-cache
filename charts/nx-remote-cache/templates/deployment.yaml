@@ -42,9 +42,16 @@ spec:
             - name: http
               containerPort: {{ .Values.config.port }}
               protocol: TCP
+            {{- if ne (int .Values.config.metricsPort) 0 }}
+            - name: metrics
+              containerPort: {{ .Values.config.metricsPort }}
+              protocol: TCP
+            {{- end }}
           env:
             - name: PORT
               value: {{ .Values.config.port | quote }}
+            - name: METRICS_PORT
+              value: {{ .Values.config.metricsPort | quote }}
             - name: AWS_REGION
               value: {{ .Values.config.awsRegion | quote }}
             - name: S3_BUCKET_NAME

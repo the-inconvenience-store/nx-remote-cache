@@ -95,6 +95,15 @@ the AWS env refs are `optional: true`.
   GET returns 404 (cache miss) and PUT returns 403 (not stored) so Nx keeps
   building. Set `false` to return 503 and fail the Nx run instead.
 
+## Metrics
+
+The server serves Prometheus metrics at `/metrics` on `config.metricsPort`
+(`METRICS_PORT`, default `9090`), exposed as the container port named
+`metrics`. The Service does not include it, so an Ingress for the cache does
+not show it; scrape the pods directly. The port is plain HTTP without
+authentication, even with `tls.enabled`. Set `config.metricsPort` to `0` to
+turn metrics off.
+
 ## Serving over HTTPS
 
 TLS is usually terminated at the Ingress. If you instead want the pod itself to
@@ -134,6 +143,7 @@ helm install nx-cache oci://ghcr.io/the-inconvenience-store/charts/nx-remote-cac
 | `probes.readiness.enabled` | `true` | Readiness probe on `/ready` (checks bucket access) |
 | `probes.readiness.timeoutSeconds` | `3` | Must exceed the 2s bucket check |
 | `config.port` | `3000` | `PORT` |
+| `config.metricsPort` | `9090` | `METRICS_PORT`; Prometheus `/metrics` port, `0` turns metrics off |
 | `config.failOpen` | `true` | `NX_CACHE_FAIL_OPEN`; `false` returns 503 on storage failures |
 | `config.maxArtifactBytes` | `0` | `NX_CACHE_MAX_ARTIFACT_BYTES`; `0` is no limit; larger uploads get 403 and are not stored; anything but a whole number of 0 or more stops startup |
 | `config.awsRegion` | `us-east-1` | `AWS_REGION` |
