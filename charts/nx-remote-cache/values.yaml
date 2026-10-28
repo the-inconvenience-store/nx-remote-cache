@@ -20,6 +20,24 @@ tolerations: []
 affinity: {}
 podAnnotations: {}
 podLabels: {}
+
+podDisruptionBudget:
+  enabled: false
+
+serviceMonitor:
+  enabled: false
+
+# Set these when the cluster enforces a restricted pod security standard:
+# podSecurityContext:
+#   runAsNonRoot: true
+#   seccompProfile:
+#     type: RuntimeDefault
+# securityContext:
+#   allowPrivilegeEscalation: false
+#   readOnlyRootFilesystem: true
+#   capabilities:
+#     drop:
+#       - ALL
 podSecurityContext: {}
 securityContext: {}
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -28,14 +29,23 @@ const (
 type fakeS3 struct {
 	mu       sync.Mutex
 	objects  map[string][]byte
+	metadata map[string]map[string]string
 	override func(w http.ResponseWriter, r *http.Request) bool
 	calls    atomic.Int32
 	URL      string
 }
 
+func (f *fakeS3) objectMetadata(key string) map[string]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	metadata := make(map[string]string, len(f.metadata[key]))
+	maps.Copy(metadata, f.metadata[key])
+	return metadata
+}
+
 func newFakeS3(t *testing.T) *fakeS3 {
 	t.Helper()
-	f := &fakeS3{objects: map[string][]byte{}}
+	f := &fakeS3{objects: map[string][]byte{}, metadata: map[string]map[string]string{}}
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 	f.URL = srv.URL
@@ -98,6 +108,13 @@ func (f *fakeS3) put(w http.ResponseWriter, r *http.Request, key string) {
 		return
 	}
 	f.objects[key] = data
+	metadata := make(map[string]string)
+	for name, values := range r.Header {
+		if strings.HasPrefix(strings.ToLower(name), "x-amz-meta-") && len(values) > 0 {
+			metadata[strings.TrimPrefix(strings.ToLower(name), "x-amz-meta-")] = values[0]
+		}
+	}
+	f.metadata[key] = metadata
 	w.Header().Set("ETag", `"etag"`)
 	w.WriteHeader(http.StatusOK)
 }

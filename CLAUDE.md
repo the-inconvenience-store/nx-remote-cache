@@ -38,7 +38,9 @@ mise pins all tools and runs tasks (`mise run <task>`):
   Bearer auth with constant-time compare against every listed token before
   reading body or touching storage; read-only tokens may only GET. Uploads
   stream with Content-Length, HeadObject then PutObject with `If-None-Match: *`
-  (dropped per process once storage reports it unsupported). Storage failures:
+  and metadata identifying the uploader by the first 12 hex characters of the
+  token's SHA-256 plus the RFC 3339 UTC upload time. (The condition is dropped
+  per process once storage reports it unsupported.) Storage failures:
   fail-open (default) → GET 404 / PUT 403; `NX_CACHE_FAIL_OPEN=false` → 503.
   Plain-text bodies. S3 transport keeps up to 256 idle connections (SDK
   default 10 per host) so Nx's burst of parallel GETs reuses connections;

@@ -1,0 +1,13 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "nx-remote-cache.fullname" . }}
+  labels:
+    {{- include "nx-remote-cache.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "nx-remote-cache.selectorLabels" . | nindent 6 }}
+{{- end }}

@@ -12,6 +12,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	"github.com/the-inconvenience-store/nx-remote-cache/internal/s3test"
 	"github.com/the-inconvenience-store/nx-remote-cache/internal/server"
@@ -139,6 +143,32 @@ func TestBackendRoundTripsLargeStreamedArtifact(t *testing.T) {
 		expect(t, status, body, http.StatusNotFound, "The record was not found")
 		status, body = send(t, url, getCall("/ready", ""))
 		expect(t, status, body, http.StatusOK, "OK")
+	})
+}
+
+func TestBackendUploadRecordsWriterMetadata(t *testing.T) {
+	t.Parallel()
+	eachBackend(t, func(t *testing.T, b *s3test.Backend) { //nolint:thelper // subtest body
+		const key = "metadata"
+		status, body := send(t, backendServerURL(t, b, backendServer{}), putCall(key, accessToken, "artifact"))
+		expect(t, status, body, http.StatusOK, "Successfully uploaded")
+
+		head, err := b.Client().HeadObject(t.Context(), &s3.HeadObjectInput{
+			Bucket: aws.String(s3test.Bucket), Key: aws.String(key),
+		})
+		if err != nil {
+			t.Fatalf("HeadObject: %v", err)
+		}
+		if got, want := head.Metadata["nx-writer"], "4c5dc9b77089"; got != want {
+			t.Errorf("nx-writer metadata = %q, want %q", got, want)
+		}
+		uploadedAt := head.Metadata["nx-uploaded-at"]
+		if uploadedAt == "" {
+			t.Fatal("nx-uploaded-at metadata is missing")
+		}
+		if _, err := time.Parse(time.RFC3339Nano, uploadedAt); err != nil {
+			t.Errorf("nx-uploaded-at metadata %q is not RFC3339 UTC: %v", uploadedAt, err)
+		}
 	})
 }
 

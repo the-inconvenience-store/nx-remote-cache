@@ -11,6 +11,29 @@ import (
 	"github.com/the-inconvenience-store/nx-remote-cache/internal/server"
 )
 
+func TestUploadRecordsWriterMetadataAndLog(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	s3 := newFakeS3(t)
+	h := newHandler(t, s3.URL, options{logs: &logs})
+
+	status, _ := put(t, h, "writer", accessToken, "artifact")
+	if status != http.StatusOK {
+		t.Fatalf("PUT status = %d, want %d", status, http.StatusOK)
+	}
+	metadata := s3.objectMetadata("writer")
+	if got, want := metadata["nx-writer"], "4c5dc9b77089"; got != want {
+		t.Errorf("nx-writer metadata = %q, want %q", got, want)
+	}
+	if got := metadata["nx-uploaded-at"]; got == "" {
+		t.Error("nx-uploaded-at metadata is empty")
+	}
+	expectRequestLog(t, &logs, map[string]string{"method": "PUT", "writer": "4c5dc9b77089"})
+	if strings.Contains(logs.String(), accessToken) {
+		t.Error("request log contains bearer token")
+	}
+}
+
 func TestHealthNeedsNoAuthOrStorage(t *testing.T) {
 	t.Parallel()
 	h := newHandler(t, "http://127.0.0.1:1", options{})

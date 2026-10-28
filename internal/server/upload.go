@@ -1,10 +1,14 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
+	"time"
 
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -40,7 +44,11 @@ func (h *handler) upload(w http.ResponseWriter, r *http.Request, req *cacheReque
 		req.outcome = outcomeConflict
 		return
 	}
-	req.outcome = h.putObject(w, r, req.hash)
+	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	digest := sha256.Sum256([]byte(token))
+	req.writer = hex.EncodeToString(digest[:])[:12]
+	req.uploadedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	req.outcome = h.putObject(w, r, req.hash, req.writer, req.uploadedAt)
 }
 
 // objectExists is a fast duplicate check. It is not race-free; the conditional
@@ -56,13 +64,14 @@ func (h *handler) objectExists(r *http.Request, hash string) (bool, error) {
 	return false, err
 }
 
-func (h *handler) putObject(w http.ResponseWriter, r *http.Request, hash string) outcome {
+func (h *handler) putObject(w http.ResponseWriter, r *http.Request, hash, writer, uploadedAt string) outcome {
 	body := &trackedBody{r: r.Body, received: h.metrics.received}
 	input := &s3.PutObjectInput{
 		Bucket:        &h.cfg.Bucket,
 		Key:           &hash,
 		Body:          body,
 		ContentLength: new(r.ContentLength),
+		Metadata:      map[string]string{"nx-writer": writer, "nx-uploaded-at": uploadedAt},
 	}
 	conditional := !h.conditionalUnsupported.Load()
 	if conditional {
