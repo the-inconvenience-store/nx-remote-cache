@@ -1,27 +1,36 @@
-# nx-cache-server Helm chart
+# nx-remote-cache Helm chart
 
-Helm chart for deploying [nx-cache-server](https://github.com/IKatsuba/nx-cache-server)
-— a self-hosted Nx remote cache backed by S3-compatible storage — to Kubernetes.
+Helm chart for deploying
+[nx-remote-cache](https://github.com/the-inconvenience-store/nx-remote-cache) —
+a self-hosted Nx remote cache backed by S3-compatible storage — to Kubernetes.
 
 ## Install
 
 Charts are published as OCI artifacts to GHCR.
 
 ```bash
-helm install nx-cache oci://ghcr.io/ikatsuba/charts/nx-cache-server \
+helm install nx-cache oci://ghcr.io/the-inconvenience-store/charts/nx-remote-cache \
   --version 0.1.0 \
   --namespace nx-cache --create-namespace \
   --set secrets.nxCacheAccessToken=<token> \
   --set secrets.awsAccessKeyId=<key> \
   --set secrets.awsSecretAccessKey=<secret> \
-  --set config.s3.bucketName=nx-cloud \
-  --set config.s3.endpointUrl=https://s3.amazonaws.com
+  --set config.s3.bucketName=nx-cloud
 ```
+
+Set `config.s3.endpointUrl` for S3-compatible storage other than AWS S3; leave
+it empty for AWS.
 
 ## Using an externally managed Secret
 
-Create a Secret with the three required keys and reference it via
-`secrets.existingSecret`:
+Reference an existing Secret via `secrets.existingSecret`. Keys:
+
+| Key | Required | Env var |
+| --- | --- | --- |
+| `nx-cache-access-token` | yes | `NX_CACHE_ACCESS_TOKEN` (read/write) |
+| `nx-cache-read-only-token` | no | `NX_CACHE_READ_ONLY_TOKEN` (download only) |
+| `aws-access-key-id` | no (both or neither) | `AWS_ACCESS_KEY_ID` |
+| `aws-secret-access-key` | no (both or neither) | `AWS_SECRET_ACCESS_KEY` |
 
 ```bash
 kubectl create secret generic nx-cache-creds \
@@ -29,41 +38,64 @@ kubectl create secret generic nx-cache-creds \
   --from-literal=aws-access-key-id=<key> \
   --from-literal=aws-secret-access-key=<secret>
 
-helm install nx-cache oci://ghcr.io/ikatsuba/charts/nx-cache-server \
+helm install nx-cache oci://ghcr.io/the-inconvenience-store/charts/nx-remote-cache \
   --version 0.1.0 \
-  --set secrets.existingSecret=nx-cache-creds \
-  --set config.s3.endpointUrl=https://s3.amazonaws.com
+  --set secrets.existingSecret=nx-cache-creds
 ```
+
+Omit optional keys rather than storing empty values: the server rejects an empty
+read-only token, and setting only one AWS key prevents startup.
+
+## Read-only clients
+
+Add `nx-cache-read-only-token` to the Secret, or set
+`secrets.nxCacheReadOnlyToken` when the chart creates it. It must be nonempty,
+contain no whitespace, and differ from `nx-cache-access-token`. The access token
+keeps read/write permission; the read-only token permits GET and gets 403 on
+PUT. Give PR jobs only the read-only token (or none if they must not read cached
+outputs).
 
 ## IRSA / Workload Identity (no static AWS keys)
 
-Annotate the ServiceAccount so the pod uses cloud-native credentials. With
-IRSA on EKS:
+When neither AWS key is set, the server uses the AWS SDK default credential
+chain (IRSA web identity, instance profile, etc.). Annotate the ServiceAccount
+and leave both AWS keys out:
 
 ```yaml
 serviceAccount:
   annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/nx-cache-server
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/nx-remote-cache
 
 secrets:
-  existingSecret: nx-cache-token-only  # holding only nx-cache-access-token
+  nxCacheAccessToken: <token>
+  # awsAccessKeyId / awsSecretAccessKey left empty: omitted from the Secret
 ```
 
-When using IRSA you still need `aws-access-key-id` / `aws-secret-access-key`
-keys in the Secret because the server reads them from env vars. To opt fully
-out of static keys, fork the chart or set them to empty placeholders if your
-S3 client picks up the IAM role from the metadata service.
+With `existingSecret`, a Secret holding only `nx-cache-access-token` works too;
+the AWS env refs are `optional: true`.
+
+## Health, readiness and storage outages
+
+- Liveness probe: `/health` (process only).
+- Readiness probe: `/ready`, which checks bucket access with `HeadBucket`
+  (2-second internal timeout, so `probes.readiness.timeoutSeconds` defaults to
+  3). Pods that lose storage access leave the Service without restarting.
+  `HeadBucket` needs `s3:ListBucket`.
+- `config.failOpen` (`NX_CACHE_FAIL_OPEN`, default `true`): on storage failure,
+  GET returns 404 (cache miss) and PUT returns 403 (not stored) so Nx keeps
+  building. Set `false` to return 503 and fail the Nx run instead.
 
 ## Serving over HTTPS
 
 TLS is usually terminated at the Ingress. If you instead want the pod itself to
 serve HTTPS, point `tls.secretName` at an existing `kubernetes.io/tls` Secret
 (e.g. one issued by cert-manager) and enable TLS. The cert/key are mounted
-read-only and the probes switch to the HTTPS scheme automatically.
+read-only, `TLS_CERT_PATH`/`TLS_KEY_PATH` are set, and the probes switch to the
+HTTPS scheme automatically.
 
 ```bash
-helm install nx-cache oci://ghcr.io/ikatsuba/charts/nx-cache-server \
-  --set config.s3.endpointUrl=https://s3.amazonaws.com \
+helm install nx-cache oci://ghcr.io/the-inconvenience-store/charts/nx-remote-cache \
+  --set secrets.existingSecret=nx-cache-creds \
   --set tls.enabled=true \
   --set tls.secretName=nx-cache-tls
 ```
@@ -78,31 +110,34 @@ helm install nx-cache oci://ghcr.io/ikatsuba/charts/nx-cache-server \
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `image.repository` | `ghcr.io/ikatsuba/nx-cache-server` | Container image |
+| `image.repository` | `ghcr.io/the-inconvenience-store/nx-remote-cache` | Container image |
 | `image.tag` | `""` (Chart.AppVersion) | Image tag |
 | `image.pullPolicy` | `IfNotPresent` | |
 | `imagePullSecrets` | `[]` | |
-| `replicaCount` | `1` | |
+| `replicaCount` | `1` | Run more than one for availability |
 | `service.type` | `ClusterIP` | |
 | `service.port` | `3000` | |
 | `serviceAccount.create` | `true` | |
 | `serviceAccount.name` | `""` | |
 | `serviceAccount.annotations` | `{}` | IRSA / Workload Identity annotations |
 | `probes.liveness.enabled` | `true` | Liveness probe on `/health` |
-| `probes.readiness.enabled` | `true` | Readiness probe on `/health` |
-| `config.port` | `3000` | Container `PORT` |
+| `probes.readiness.enabled` | `true` | Readiness probe on `/ready` (checks bucket access) |
+| `probes.readiness.timeoutSeconds` | `3` | Must exceed the 2s bucket check |
+| `config.port` | `3000` | `PORT` |
+| `config.failOpen` | `true` | `NX_CACHE_FAIL_OPEN`; `false` returns 503 on storage failures |
 | `config.awsRegion` | `us-east-1` | `AWS_REGION` |
 | `config.s3.bucketName` | `nx-cloud` | `S3_BUCKET_NAME` |
-| `config.s3.endpointUrl` | `""` | **Required.** `S3_ENDPOINT_URL` |
+| `config.s3.endpointUrl` | `""` | `S3_ENDPOINT_URL`; omitted when empty (AWS S3) |
 | `secrets.existingSecret` | `""` | If set, skip Secret creation and use this one |
 | `secrets.nxCacheAccessToken` | `""` | Required if `existingSecret` is empty |
-| `secrets.awsAccessKeyId` | `""` | Required if `existingSecret` is empty |
-| `secrets.awsSecretAccessKey` | `""` | Required if `existingSecret` is empty |
+| `secrets.nxCacheReadOnlyToken` | `""` | Optional download-only token |
+| `secrets.awsAccessKeyId` | `""` | Optional; set both AWS keys or neither |
+| `secrets.awsSecretAccessKey` | `""` | Optional; set both AWS keys or neither |
 | `tls.enabled` | `false` | Serve over HTTPS using a mounted cert/key |
 | `tls.secretName` | `""` | Existing Secret holding the PEM cert/key. Required when `tls.enabled` |
 | `tls.certKey` | `tls.crt` | Key in the Secret holding the PEM cert |
 | `tls.keyKey` | `tls.key` | Key in the Secret holding the PEM key |
-| `tls.mountPath` | `/etc/nx-cache-server/tls` | Mount path for the cert/key |
+| `tls.mountPath` | `/etc/nx-remote-cache/tls` | Mount path for the cert/key |
 | `extraEnv` | `[]` | Extra env vars appended to the container |
 | `resources` | `{}` | |
 | `nodeSelector` | `{}` | |
@@ -112,6 +147,3 @@ helm install nx-cache oci://ghcr.io/ikatsuba/charts/nx-cache-server \
 | `podLabels` | `{}` | |
 | `podSecurityContext` | `{}` | |
 | `securityContext` | `{}` | |
-
-When using `secrets.existingSecret`, the Secret must contain the keys
-`nx-cache-access-token`, `aws-access-key-id`, `aws-secret-access-key`.

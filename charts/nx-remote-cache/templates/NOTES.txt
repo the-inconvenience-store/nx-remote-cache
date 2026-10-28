@@ -1,21 +1,18 @@
 {{ .Chart.Name }} {{ .Chart.AppVersion }} has been installed as release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
 
-Service: {{ include "nx-cache-server.fullname" . }} ({{ .Values.service.type }}) on port {{ .Values.service.port }}
+Service: {{ include "nx-remote-cache.fullname" . }} ({{ .Values.service.type }}) on port {{ .Values.service.port }}
+{{- $scheme := ternary "https" "http" .Values.tls.enabled }}
 
 To reach the cache server from your machine:
 
-  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "nx-cache-server.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
-  curl -fsS http://localhost:{{ .Values.service.port }}/health
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "nx-remote-cache.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  curl -fsS {{ $scheme }}://localhost:{{ .Values.service.port }}/health
+  curl -fsS {{ $scheme }}://localhost:{{ .Values.service.port }}/ready
 
-Point Nx at it via nx.json:
+Point Nx at it with environment variables:
 
-  "tasksRunnerOptions": {
-    "default": {
-      "options": {
-        "remoteCache": {
-          "url": "http://<your-ingress-or-service>:{{ .Values.service.port }}/v1/cache",
-          "accessToken": "<NX_CACHE_ACCESS_TOKEN>"
-        }
-      }
-    }
-  }
+  NX_SELF_HOSTED_REMOTE_CACHE_SERVER={{ $scheme }}://<your-ingress-or-service>:{{ .Values.service.port }}
+  NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN=<NX_CACHE_ACCESS_TOKEN or NX_CACHE_READ_ONLY_TOKEN>
+
+Use the read/write token only in trusted builds; give untrusted PR jobs the
+read-only token (or none).

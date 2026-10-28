@@ -1,97 +1,69 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with
-code in this repository.
+Guidance for Claude Code working in this repository.
 
 ## Project Overview
 
-Deno-based HTTP server implementing the
-[Nx Custom Self-Hosted Remote Cache specification](https://nx.dev/recipes/running-tasks/self-hosted-caching#build-your-own-caching-server).
-Uses Hono as the HTTP framework and S3-compatible storage (real AWS S3 in
-production; [emulate.dev](https://emulate.dev) for local dev/tests) as the cache
-backend. Published as a multi-platform Docker image to
-`ghcr.io/ikatsuba/nx-cache-server`.
+Go HTTP server implementing the
+[Nx self-hosted remote cache specification](https://nx.dev/docs/kb/self-hosted-caching)
+(spec copy: `docs/nx-remote-cache.openapi.json`), backed by S3 or S3-compatible
+storage via aws-sdk-go-v2. Module `github.com/the-inconvenience-store/nx-remote-cache`.
+Image `ghcr.io/the-inconvenience-store/nx-remote-cache`; Helm chart in
+`charts/nx-remote-cache`.
 
 ## Commands
 
-```bash
-# Start the local S3 emulator (emulate.dev AWS service on :4566, seeds nx-cloud bucket)
-deno task emulate
+mise pins all tools and runs tasks (`mise run <task>`):
 
-# Development (watch mode, uses .env.local; expects `deno task emulate` running in another terminal)
-deno task dev
-
-# Production start (uses .env)
-deno task start
-
-# Unit tests (self-host the emulator, no external deps)
-deno task test
-
-# E2E tests (creates a real Nx workspace; self-hosts emulator + cache server)
-deno task e2e
-
-# Lint and format
-deno lint
-deno fmt --check
-deno fmt
-```
+- `bootstrap` — install tools, Go modules, lefthook hooks
+- `fmt` / `fmt-check` — golangci-lint formatters
+- `lint` — golangci-lint, hadolint, actionlint, typos, helm lint
+- `test` — unit tests (no Docker)
+- `test-integration` — Garage via testcontainers (Docker)
+- `e2e` — real Nx 23.3 builds (Docker + Node)
+- `test-s3` — optional atomic-write contract against a real bucket
+- `audit` (govulncheck), `deadcode`, `check` (full local gate)
+- `dev` — Garage via `compose.yaml` + server with `.env.local`
+- `docker` — build the image
 
 ## Architecture
 
-Single-file application (`src/index.ts`) built on Hono with typed bindings for
-env vars and an S3Client context variable.
-
-**Request flow:** S3Client init middleware -> Logger middleware -> Auth
-middleware (Bearer token) -> Route handler
-
-**Routes:**
-
-- `GET /health` — health check (no auth)
-- `PUT /v1/cache/:hash` — upload artifact to S3 (checks for duplicates with
-  HeadObject, returns 409 on conflict)
-- `GET /v1/cache/:hash` — download artifact via S3 presigned URL
-
-**Key pattern:** The Hono `app` is exported separately from server startup
-(`if (import.meta.main)`), allowing unit tests to call `app.fetch()` directly
-with mock env bindings without starting a real server.
+- `cmd/nx-remote-cache` — reads and validates env config (exit 1 on error),
+  builds the S3 client, optional TLS, `http.Server` (ReadHeaderTimeout 10s,
+  IdleTimeout 120s), graceful shutdown on SIGTERM/SIGINT (25s drain).
+- `internal/server` — `New(Config) (http.Handler, error)`. Stdlib routing:
+  `GET /health`, `GET /ready` (HeadBucket, 2s), `PUT`/`GET /v1/cache/{hash}`.
+  Bearer auth with constant-time compare before reading body or touching
+  storage; read-only token may only GET. Uploads stream with Content-Length,
+  HeadObject then PutObject with `If-None-Match: *` (dropped per process once
+  storage reports it unsupported). Storage failures: fail-open (default) →
+  GET 404 / PUT 403; `NX_CACHE_FAIL_OPEN=false` → 503. Plain-text bodies.
+- `internal` must not import `cmd`.
 
 ## Testing
 
-- **Unit tests** (`src/index.test.ts`): Call `app.fetch()` directly. `beforeAll`
-  boots an `emulate.dev` AWS service via `scripts/start-emulator.ts`; `afterAll`
-  shuts it down.
-- **E2E tests** (`e2e/e2e.test.ts`): Scaffold a full Nx React workspace via
-  `create-nx-workspace`. `beforeAll` boots the emulator AND serves the cache
-  server in-process on `:3000` (`Deno.serve` + the exported `app`). Then runs
-  builds and verifies cache miss then cache hit. Uses `@david/dax` for shell
-  commands.
-
-Both suites are self-contained — no Docker, no separate `deno task dev`.
+- Unit: package `server_test` exercises the handler against an httptest fake S3.
+- `//go:build integration`: testcontainers-go with Garage.
+- `//go:build e2e` (`e2e/`): Nx 23.3 workspace builds, cache miss then hit.
+- `//go:build s3contract`: env-configured contract against real S3.
 
 ## Environment Variables
 
-Required at runtime: `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
-`S3_BUCKET_NAME`, `S3_ENDPOINT_URL`, `NX_CACHE_ACCESS_TOKEN`. Optional: `PORT`
-(default 3000).
+Required: `NX_CACHE_ACCESS_TOKEN`. Optional: `NX_CACHE_READ_ONLY_TOKEN`,
+`PORT` (3000), `AWS_REGION` (us-east-1), `S3_BUCKET_NAME` (nx-cloud),
+`S3_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (both or
+neither; neither → default credential chain), `NX_CACHE_FAIL_OPEN` (true),
+`TLS_CERT_PATH` + `TLS_KEY_PATH` (both or neither). See README for rules.
 
-Local dev values are in `.env.local` (emulate.dev's seeded IAM defaults:
-`AKIAIOSFODNN7EXAMPLE` / `wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY`, bucket
-`nx-cloud`, endpoint `http://localhost:4566`).
+## CI
 
-## CI/CD
-
-GitHub Actions (`.github/workflows/main.yml`) runs on push/PR to main and
-releases:
-
-1. **checks**: `deno lint` + `deno fmt --check`
-2. **e2e**: runs `deno task test` + `deno task e2e` directly (each suite
-   self-hosts its dependencies)
-3. **publish** (after checks + e2e pass): builds multi-platform Docker image
-   (amd64/arm64) and pushes to GHCR
+GitHub Actions via jdx/mise-action: check, integration, e2e, cog check on PR
+commits, helm lint, then multi-arch distroless image and chart publish to GHCR.
+Dependabot weekly for gomod, docker, github-actions.
 
 ## Conventions
 
-- Deno runtime (not Node.js) — use `deno.json` for deps, tasks, and config
-- Single quotes enforced via `"fmt": { "singleQuote": true }` in `deno.json`
-- Dependencies use `npm:` and `jsr:` specifiers in the `imports` map
-- Deno permissions are explicit per task (no `--allow-all`)
+- Stdlib `testing` only (no testify).
+- Logging with `log/slog`.
+- Conventional Commits, enforced by cocogitto.
+- `.golangci.yml` is the source of truth for lint and formatting rules.

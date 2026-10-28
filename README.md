@@ -1,184 +1,250 @@
-# Nx Custom Self-Hosted Remote Cache Server
+# nx-remote-cache
 
-A Deno-based server implementation of the Nx Custom Self-Hosted Remote Cache
-specification. This server provides a caching layer for Nx build outputs using
-Amazon S3 as the storage backend.
-
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template/-bmO7p?referralCode=73cYCO)
-
-## Overview
-
-This server implements the
-[Nx Custom Remote Cache OpenAPI specification](https://nx.dev/recipes/running-tasks/self-hosted-caching#build-your-own-caching-server)
-and provides a production-ready solution for self-hosting your Nx remote cache.
+A small Go server implementing the
+[Nx self-hosted remote cache specification](https://nx.dev/docs/kb/self-hosted-caching),
+backed by S3 or any S3-compatible object store. A copy of the Nx OpenAPI spec
+lives in [`docs/nx-remote-cache.openapi.json`](docs/nx-remote-cache.openapi.json)
+(source: <https://nx.dev/docs/kb/self-hosted-caching>).
 
 ## Features
 
-- Implements the Nx custom remote cache specification
-- Uses Amazon S3 for storage
-- Secure authentication using Bearer tokens
-- Efficient file streaming
-- Production-ready implementation
-- Available as a Docker image
+- Implements `PUT`/`GET /v1/cache/{hash}` from the Nx spec; artifacts are
+  immutable (existing hashes return 409).
+- Streaming uploads and downloads — artifacts are never buffered in memory or
+  on disk.
+- Conditional writes (`If-None-Match: *`) where the storage supports them, to
+  stop concurrent overwrites.
+- Optional read-only token for untrusted CI jobs.
+- Graceful degradation during storage outages so Nx keeps building.
+- `/health` liveness and `/ready` storage-readiness endpoints.
+- Static AWS keys or the AWS default credential chain (IRSA, instance profile).
+- Optional HTTPS; distroless multi-arch image; Helm chart.
 
-## Prerequisites
+## Configuration
 
-- [Deno](https://deno.land/) installed on your system
-- S3 compatible storage
+All configuration comes from environment variables, validated once at startup.
+Invalid configuration prints an error to stderr and exits with status 1. See
+[`.env.example`](.env.example).
 
-## Environment Variables
+| Variable | Required | Default | Rules |
+| --- | --- | --- | --- |
+| `NX_CACHE_ACCESS_TOKEN` | yes | — | Trusted read/write token. Nonempty, no whitespace. |
+| `NX_CACHE_READ_ONLY_TOKEN` | no | unset | Download-only token. If set (even empty) it must be nonempty, contain no whitespace, and differ from `NX_CACHE_ACCESS_TOKEN`. |
+| `PORT` | no | `3000` | Listen port. |
+| `AWS_REGION` | no | `us-east-1` | |
+| `S3_BUCKET_NAME` | no | `nx-cloud` | |
+| `S3_ENDPOINT_URL` | no | unset (AWS S3) | Custom S3-compatible endpoint. Requests always use path-style addressing. |
+| `AWS_ACCESS_KEY_ID` | no | unset | Set both AWS keys or neither. Neither → AWS SDK default credential chain. |
+| `AWS_SECRET_ACCESS_KEY` | no | unset | See above. |
+| `NX_CACHE_FAIL_OPEN` | no | `true` | `true` or `false`; anything else is an error. See [Cache outages](#cache-outages). |
+| `TLS_CERT_PATH` | no | unset | PEM certificate. Set both TLS paths or neither; both → HTTPS. |
+| `TLS_KEY_PATH` | no | unset | PEM private key. |
 
-The following environment variables are required:
+## API
 
-```env
-AWS_REGION=your-aws-region
-AWS_ACCESS_KEY_ID=your-access-key
-AWS_SECRET_ACCESS_KEY=your-secret-key
-S3_BUCKET_NAME=your-bucket-name
-S3_ENDPOINT_URL=your-s3-endpoint-url
-NX_CACHE_ACCESS_TOKEN=your-secure-token
-PORT=3000  # Optional, defaults to 3000
-TLS_CERT_PATH=/path/to/tls.crt  # Optional, enables HTTPS (must be set with TLS_KEY_PATH)
-TLS_KEY_PATH=/path/to/tls.key   # Optional, enables HTTPS (must be set with TLS_CERT_PATH)
-```
+| Route | Auth | Responses |
+| --- | --- | --- |
+| `GET /health` | none | 200 `OK` (process liveness; never touches storage) |
+| `GET /ready` | none | 200 `OK`, or 503 `Storage unavailable` when `HeadBucket` fails within 2s |
+| `PUT /v1/cache/{hash}` | access token | 200, 401, 403, 409, 411, 500, 503 |
+| `GET /v1/cache/{hash}` | either token | 200 (`application/octet-stream`), 401, 404, 503 |
 
-See [`.env.example`](.env.example) for a ready-to-copy template.
+Cache routes require `Authorization: Bearer <token>`; anything else returns 401
+`Missing or invalid authentication token`. Response bodies are plain text.
 
-### HTTPS / TLS
+## Running
 
-By default the server listens over plain HTTP. To serve over HTTPS directly —
-without putting a reverse proxy in front of it — set both `TLS_CERT_PATH` and
-`TLS_KEY_PATH` to the PEM cert and key files (they must be set together; setting
-only one exits with a configuration error). The files are read once at startup,
-so rotating the certificate requires a restart. In Kubernetes, terminating TLS
-at the Ingress is usually preferable; this option is for direct exposure or
-mutual-TLS setups.
-
-> **Certificate trust for Nx clients.** Nx's self-hosted cache client uses a
-> native HTTP client that validates against the operating system trust store —
-> it does **not** honor `NODE_EXTRA_CA_CERTS` or `SSL_CERT_FILE`. Use a
-> certificate that is already trusted on the machines running Nx (a public CA
-> such as Let's Encrypt, or your corporate CA), or install your CA into the
-> system trust store. A bare self-signed certificate is rejected by Nx with
-> `error sending request`.
-
-## Installation
-
-### Using Docker
-
-The easiest way to run the server is using the official Docker image:
-
-```bash
-docker pull ghcr.io/ikatsuba/nx-cache-server:latest
-docker run -p 3000:3000 \
-  -e AWS_REGION=your-aws-region \
-  -e AWS_ACCESS_KEY_ID=your-access-key \
-  -e AWS_SECRET_ACCESS_KEY=your-secret-key \
-  -e S3_BUCKET_NAME=your-bucket-name \
-  -e S3_ENDPOINT_URL=your-s3-endpoint-url \
-  -e NX_CACHE_ACCESS_TOKEN=your-secure-token \
-  ghcr.io/ikatsuba/nx-cache-server:latest
-```
-
-To serve over HTTPS, mount your PEM cert/key and point the TLS env vars at them:
+### Docker
 
 ```bash
 docker run -p 3000:3000 \
-  -v /host/certs:/certs:ro \
-  -e TLS_CERT_PATH=/certs/tls.crt \
-  -e TLS_KEY_PATH=/certs/tls.key \
-  -e AWS_REGION=your-aws-region \
+  -e NX_CACHE_ACCESS_TOKEN=your-secure-token \
+  -e AWS_REGION=us-east-1 \
   -e AWS_ACCESS_KEY_ID=your-access-key \
   -e AWS_SECRET_ACCESS_KEY=your-secret-key \
-  -e S3_BUCKET_NAME=your-bucket-name \
-  -e S3_ENDPOINT_URL=your-s3-endpoint-url \
-  -e NX_CACHE_ACCESS_TOKEN=your-secure-token \
-  ghcr.io/ikatsuba/nx-cache-server:latest
+  -e S3_BUCKET_NAME=your-bucket \
+  ghcr.io/the-inconvenience-store/nx-remote-cache:0.1.0
 ```
 
-### Using Helm (Kubernetes)
+Add `-e S3_ENDPOINT_URL=...` for S3-compatible storage. The image is distroless
+(static, nonroot) and listens on port 3000.
 
-The chart is published as an OCI artifact to GHCR alongside the Docker image:
+### Helm
 
 ```bash
-helm install nx-cache oci://ghcr.io/ikatsuba/charts/nx-cache-server \
-  --version <X.Y.Z> \
-  --namespace nx-cache --create-namespace \
+helm install nx-cache oci://ghcr.io/the-inconvenience-store/charts/nx-remote-cache \
+  --version 0.1.0 \
   --set secrets.nxCacheAccessToken=your-secure-token \
-  --set secrets.awsAccessKeyId=your-access-key \
-  --set secrets.awsSecretAccessKey=your-secret-key \
-  --set config.s3.bucketName=your-bucket-name \
-  --set config.s3.endpointUrl=https://s3.amazonaws.com
+  --set config.s3.bucketName=your-bucket
 ```
 
-See [`charts/nx-cache-server/README.md`](charts/nx-cache-server/README.md) for
-the full values reference, externally managed Secret usage, and IRSA / Workload
-Identity setup.
+See the [chart README](charts/nx-remote-cache/README.md) for existing Secrets,
+IRSA, read-only tokens, readiness, fail-open and TLS.
 
-### Manual Installation
+### From source
 
-1. Clone the repository:
+Requires [mise](https://mise.jdx.dev) and Docker.
 
 ```bash
-git clone <repository-url>
-cd nx-cache-server
+mise run bootstrap   # install pinned tools, Go modules, git hooks
+mise run dev         # start Garage via compose.yaml and run the server with .env.local
 ```
-
-2. Copy the environment template and fill in your values (the `start` task reads
-   `.env`):
-
-```bash
-cp .env.example .env
-```
-
-3. Start a local S3 emulator (no Docker required — uses
-   [emulate.dev](https://emulate.dev)):
-
-```bash
-deno task emulate
-```
-
-This boots an in-memory AWS emulator on `http://localhost:4566` and seeds the
-`nx-cloud` bucket. Leave it running in its own terminal.
-
-## Running the Server
-
-Start the server with:
-
-```bash
-deno task start
-```
-
-For local development against the emulator above, use:
-
-```bash
-deno task dev
-```
-
-## Testing
-
-```bash
-deno task test
-deno task e2e
-```
-
-Both suites boot their own emulator and (for e2e) cache server — no separate
-setup is required.
 
 ## Usage with Nx
 
-To use this cache server with your Nx workspace, set the following environment
-variables:
+Set these variables wherever Nx runs:
 
 ```bash
 NX_SELF_HOSTED_REMOTE_CACHE_SERVER=http://your-server:3000
 NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN=your-secure-token
 ```
 
-## Author
+### Trusted writers and read-only clients
 
-- [Igor Katsuba](https://x.com/katsuba_igor)
+`NX_CACHE_ACCESS_TOKEN` is the trusted read/write credential.
+`NX_CACHE_READ_ONLY_TOKEN` optionally grants downloads only. Both credentials
+use the same Nx client variable, `NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN`;
+choose its value according to the job's trust level.
+
+Give the trusted credential only to protected builds that do not execute
+untrusted PR code. PR jobs may receive the read-only credential, or no
+credential if cache contents must remain private. A read-only upload returns
+HTTP 403 `Read-only credentials cannot upload artifacts`; missing or invalid
+credentials return HTTP 401. Authentication happens before the body is read or
+storage is contacted. Health and readiness checks remain unauthenticated.
+
+Tokens are compared in constant time. Invalid token configuration prevents
+startup; omit the optional read-only setting rather than setting it to an empty
+string. Use HTTPS between clients and the server, whether TLS terminates here or
+at a trusted proxy.
+
+For Helm, set `secrets.nxCacheReadOnlyToken`, or add the optional
+`nx-cache-read-only-token` key to the existing Secret.
+
+## Streaming uploads
+
+Upload bodies stream directly to S3; the server does not buffer the complete
+artifact in memory or spool it to disk. `Content-Length` is required (411
+otherwise) and is forwarded to S3. Uploads are sent with an unsigned payload,
+and request checksums are added only when the storage requires them, so the
+upload is an ordinary length-delimited S3 `PutObject`. Each upload is a single
+S3 PUT, so the provider's single-PUT size limit applies.
+
+Request bodies are one-shot: the server makes exactly one storage attempt and
+never replays a body. A client disconnect or body-read error aborts the storage
+request, nothing is stored, and the server returns 500. A retry requires a fresh
+client request. Memory use scales with concurrent stream buffers, not artifact
+size.
+
+## Upload compatibility
+
+Uploads first check for an existing object with `HeadObject` (409 if present),
+then send `PutObject` with `If-None-Match: *` so concurrent writers cannot
+overwrite each other on storage that supports conditional writes. A failed
+precondition returns 409 `Cannot override an existing record`; transient
+conditional-write conflicts are treated as storage failures.
+
+If the storage explicitly reports that conditional writes are unsupported, that
+upload returns 403 `Cache storage unavailable; artifact not stored` (Nx treats
+it as non-fatal), a warning is logged, and later uploads in the same process are
+sent without the condition. The `HeadObject` check is kept. No configuration is
+needed. Authentication, checksum, network, and unrelated storage errors remain
+errors. See
+[S3 conditional-write semantics](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html).
+
+To measure a backend's atomic-write capability, run the optional contract test
+against a disposable bucket:
+
+```bash
+AWS_REGION=your-region \
+AWS_ACCESS_KEY_ID=your-access-key \
+AWS_SECRET_ACCESS_KEY=your-secret-key \
+S3_BUCKET_NAME=your-test-bucket \
+S3_ENDPOINT_URL=https://your-s3-endpoint \
+mise run test-s3
+```
+
+It races concurrent writers, verifies exactly one succeeds, and checks later
+writes cannot replace its bytes. Normal operation does not depend on it passing.
+Use only a test bucket; the test writes, reads and deletes its own objects.
+
+## Cache outages
+
+Nx 23.3's self-hosted cache client treats only `GET` 404 as a cache miss, and
+only `PUT` 403 and 409 as non-fatal. Every other response, including 5xx and
+connection failures, fails the Nx run. By default (`NX_CACHE_FAIL_OPEN=true`),
+the server degrades when storage fails so CI keeps building:
+
+- `GET` returns 404, so Nx rebuilds the task. This covers S3 errors, throttling,
+  credential and permission errors, a missing bucket, unreachable storage, and
+  no response headers within 5 seconds.
+- `PUT` returns 403 `Cache storage unavailable; artifact not stored`, so Nx
+  continues without caching the artifact.
+- Each degraded response logs `Storage unavailable during GET|PUT <hash>`.
+- A bad Nx access token still returns 401.
+
+Set `NX_CACHE_FAIL_OPEN=false` to return 503 `Cache storage unavailable`
+instead, failing the Nx run on storage errors.
+
+`/ready` checks bucket access with `HeadBucket` (2-second timeout) and returns
+503 `Storage unavailable` on failure; details appear only in server logs. It
+requires no token. `/health` remains a process-only liveness check. The Helm
+chart's readiness probe uses `/ready`, so pods that lose storage access leave
+the Service without restarting. `HeadBucket` needs `s3:ListBucket`, which the
+upload duplicate check already requires.
+
+The server cannot protect against these failures:
+
+- A storage failure after a download has started streaming truncates the
+  response, and Nx fails the run.
+- If the cache server itself is unreachable, Nx fails the run. Run more than one
+  replica behind the readiness probe.
+- Nx has no setting that makes cache errors non-fatal. `skipRemoteCache`
+  disables the remote cache entirely.
+
+## Development
+
+[mise](https://mise.jdx.dev) pins every tool (Go, golangci-lint, lefthook,
+hadolint, cocogitto, actionlint, helm, typos, govulncheck, deadcode) and runs
+all tasks.
+
+| Task | What it does |
+| --- | --- |
+| `mise run bootstrap` | Install pinned tools, Go modules, and git hooks |
+| `mise run fmt` | Format Go code |
+| `mise run fmt-check` | Fail if Go code is not formatted |
+| `mise run lint` | golangci-lint, hadolint, actionlint, typos, helm lint |
+| `mise run test` | Unit tests (no Docker) |
+| `mise run test-integration` | Integration tests against Garage via testcontainers (needs Docker) |
+| `mise run e2e` | Real Nx 23.3 builds against the server and Garage (needs Docker and Node) |
+| `mise run test-s3` | Optional atomic-write contract against a real bucket |
+| `mise run audit` | govulncheck |
+| `mise run deadcode` | Report functions unreachable from main |
+| `mise run check` | Full local gate: fmt-check, lint, test, audit, deadcode |
+| `mise run dev` | Run Garage via compose and the server against it |
+| `mise run docker` | Build the container image |
+
+`mise run bootstrap` installs [lefthook](https://lefthook.dev) hooks:
+pre-commit formats staged Go files and runs the linters on matching staged
+files, commit-msg verifies the message, and pre-push runs the unit tests.
+
+Commits follow [Conventional Commits](https://www.conventionalcommits.org),
+checked by [cocogitto](https://docs.cocogitto.io) locally and in CI.
+
+Tests: unit tests use the standard library `testing` package with a fake S3 and
+need no Docker. Integration tests (`integration` build tag) and Nx end-to-end
+tests (`e2e` tag) start Garage with testcontainers and need Docker; e2e also
+needs Node to run Nx 23.3. The S3 contract test (`s3contract` tag) is optional
+and runs against a bucket you configure.
+
+Dependabot updates Go modules, Docker base images and GitHub Actions weekly.
+Tool pins in `mise.toml` are updated with `mise upgrade --bump`.
+
+## Acknowledgements
+
+nx-remote-cache is a Go rewrite of
+[nx-cache-server](https://github.com/IKatsuba/nx-cache-server) by Igor Katsuba.
 
 ## License
 
-MIT
+[MIT](LICENSE)

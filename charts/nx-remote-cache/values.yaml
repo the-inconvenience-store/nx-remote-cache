@@ -1,5 +1,5 @@
 image:
-  repository: ghcr.io/ikatsuba/nx-cache-server
+  repository: ghcr.io/the-inconvenience-store/nx-remote-cache
   # Defaults to .Chart.AppVersion if empty.
   tag: ""
   pullPolicy: IfNotPresent
@@ -37,30 +37,43 @@ probes:
     path: /health
     initialDelaySeconds: 5
     periodSeconds: 10
+  # /ready checks bucket access (2s internal timeout); unready pods leave the
+  # Service without being restarted. Liveness stays on /health.
   readiness:
     enabled: true
-    path: /health
+    path: /ready
     initialDelaySeconds: 2
     periodSeconds: 5
+    timeoutSeconds: 3
 
 # Non-secret configuration mapped to env vars in the container.
 config:
   port: 3000
+  # When storage fails, degrade to a cache miss (GET 404) or non-fatal
+  # "not stored" (PUT 403) so Nx keeps building. Set false to return 503
+  # and fail the Nx run instead.
+  failOpen: true
   awsRegion: us-east-1
   s3:
     bucketName: nx-cloud
-    # S3 endpoint URL — e.g. https://s3.amazonaws.com or a custom endpoint.
+    # Optional S3 endpoint URL for S3-compatible storage (path-style requests).
+    # Leave empty for AWS S3.
     endpointUrl: ""
 
-# Secret strategy: either supply the three values below to have the chart
-# create a Secret, or set existingSecret to the name of an externally managed
-# Secret. The external Secret must contain keys:
-#   - nx-cache-access-token
-#   - aws-access-key-id
-#   - aws-secret-access-key
+# Secret strategy: either supply the values below to have the chart create a
+# Secret, or set existingSecret to the name of an externally managed Secret.
+# Secret keys:
+#   - nx-cache-access-token     (required)
+#   - nx-cache-read-only-token  (optional)
+#   - aws-access-key-id         (optional; omit both AWS keys to use the AWS
+#   - aws-secret-access-key      default credential chain, e.g. IRSA)
+# Empty optional values are omitted from the chart-created Secret.
 secrets:
   existingSecret: ""
   nxCacheAccessToken: ""
+  # Optional; must differ from the trusted access token.
+  nxCacheReadOnlyToken: ""
+  # Optional; set both or neither.
   awsAccessKeyId: ""
   awsSecretAccessKey: ""
 
@@ -76,7 +89,7 @@ tls:
   certKey: tls.crt
   keyKey: tls.key
   # Mount path for the cert/key inside the container.
-  mountPath: /etc/nx-cache-server/tls
+  mountPath: /etc/nx-remote-cache/tls
 
 # Extra environment variables appended to the container. Use either `value`
 # or `valueFrom` per Kubernetes env semantics.

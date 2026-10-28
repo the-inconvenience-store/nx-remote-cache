@@ -1,14 +1,14 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "nx-cache-server.name" -}}
+{{- define "nx-remote-cache.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Create a default fully qualified app name.
 */}}
-{{- define "nx-cache-server.fullname" -}}
+{{- define "nx-remote-cache.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -21,27 +21,27 @@ Create a default fully qualified app name.
 {{- end }}
 {{- end }}
 
-{{- define "nx-cache-server.chart" -}}
+{{- define "nx-remote-cache.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
-{{- define "nx-cache-server.labels" -}}
-helm.sh/chart: {{ include "nx-cache-server.chart" . }}
-{{ include "nx-cache-server.selectorLabels" . }}
+{{- define "nx-remote-cache.labels" -}}
+helm.sh/chart: {{ include "nx-remote-cache.chart" . }}
+{{ include "nx-remote-cache.selectorLabels" . }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
-{{- define "nx-cache-server.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "nx-cache-server.name" . }}
+{{- define "nx-remote-cache.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "nx-remote-cache.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
-{{- define "nx-cache-server.serviceAccountName" -}}
+{{- define "nx-remote-cache.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
-{{- default (include "nx-cache-server.fullname" .) .Values.serviceAccount.name }}
+{{- default (include "nx-remote-cache.fullname" .) .Values.serviceAccount.name }}
 {{- else }}
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
@@ -51,10 +51,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 Name of the Secret holding sensitive env values. Returns existingSecret if
 set, otherwise the chart-managed Secret name.
 */}}
-{{- define "nx-cache-server.secretName" -}}
+{{- define "nx-remote-cache.secretName" -}}
 {{- if .Values.secrets.existingSecret }}
 {{- .Values.secrets.existingSecret }}
 {{- else }}
-{{- include "nx-cache-server.fullname" . }}
+{{- include "nx-remote-cache.fullname" . }}
 {{- end }}
 {{- end }}
