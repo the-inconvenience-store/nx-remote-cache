@@ -76,6 +76,8 @@ func (h *handler) putObject(w http.ResponseWriter, r *http.Request, hash, writer
 	conditional := !h.conditionalUnsupported.Load()
 	if conditional {
 		input.IfNoneMatch = new("*")
+	} else {
+		h.metrics.unconditionalUploads.Inc()
 	}
 	// The request body streams straight to S3 and cannot be replayed, so the
 	// payload is unsigned and the SDK must not retry.
@@ -95,10 +97,12 @@ func (h *handler) putObject(w http.ResponseWriter, r *http.Request, hash, writer
 		writeText(w, http.StatusConflict, "Cannot override an existing record")
 		return outcomeConflict
 	case conditional && unsupportedCondition(err):
-		h.conditionalUnsupported.Store(true)
-		h.log.WarnContext(r.Context(),
-			"Storage does not support conditional PUT; later uploads are not atomic",
-			"hash", hash, "error", err)
+		// Uploads in flight together may all be rejected; warn only at the switch.
+		if h.conditionalUnsupported.CompareAndSwap(false, true) {
+			h.log.WarnContext(r.Context(), "Storage does not support conditional writes; "+
+				"later uploads are sent without If-None-Match and can overwrite each other",
+				"hash", hash, "error", err)
+		}
 		writeNotStored(w)
 		return outcomeDegraded
 	default:

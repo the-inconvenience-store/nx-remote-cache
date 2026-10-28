@@ -1,14 +1,19 @@
 package server_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -160,5 +165,82 @@ func TestMetricsTimeS3CallsByOperation(t *testing.T) {
 	want := map[string]uint64{"HeadObject": 1, "PutObject": 1, "GetObject": 1, "HeadBucket": 1}
 	if !maps.Equal(calls, want) {
 		t.Fatalf("S3 call counts by operation: got %v, want %v", calls, want)
+	}
+}
+
+const unsupportedConditionWarning = `level=WARN msg="Storage does not support conditional writes`
+
+// rejectConditionalPuts makes s3 answer every conditional PUT as storage that
+// does not implement If-None-Match, after hold returns.
+func rejectConditionalPuts(s3 *fakeS3, hold func()) {
+	s3.override = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Method != http.MethodPut || r.Header.Get("If-None-Match") == "" {
+			return false
+		}
+		_, _ = io.Copy(io.Discard, r.Body)
+		hold()
+		writeS3Error(w, http.StatusNotImplemented, "NotImplemented",
+			"A header you provided implies functionality that is not implemented")
+		return true
+	}
+}
+
+func TestUnsupportedConditionWarnsOnceAndCountsUnconditionalUploads(t *testing.T) {
+	t.Parallel()
+	s3 := newFakeS3(t)
+	rejectConditionalPuts(s3, func() {})
+	registry := prometheus.NewRegistry()
+	var logs bytes.Buffer
+	h := newHandler(t, s3.URL, options{logs: &logs, configure: withMetrics(registry)})
+
+	put(t, h, "first", accessToken, "one")   // conditional, rejected: the switch
+	put(t, h, "second", accessToken, "two")  // unconditional
+	put(t, h, "third", accessToken, "three") // unconditional
+	put(t, h, "third", accessToken, "again") // 409 from HeadObject, never sent
+
+	if got := strings.Count(logs.String(), unsupportedConditionWarning); got != 1 {
+		t.Fatalf("%d unsupported-condition warnings, want 1:\n%s", got, logs.String())
+	}
+	want := `
+# HELP nx_cache_unconditional_uploads_total Uploads sent to storage without If-None-Match because storage does not support conditional writes.
+# TYPE nx_cache_unconditional_uploads_total counter
+nx_cache_unconditional_uploads_total 2
+`
+	if err := testutil.GatherAndCompare(registry, strings.NewReader(want),
+		"nx_cache_unconditional_uploads_total"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUnsupportedConditionWarnsOnceForConcurrentUploads(t *testing.T) {
+	t.Parallel()
+	const uploads = 4
+	s3 := newFakeS3(t)
+	var arrived atomic.Int32
+	allArrived := make(chan struct{})
+	// Every upload is sent with the condition before any is rejected.
+	rejectConditionalPuts(s3, func() {
+		if arrived.Add(1) == uploads {
+			close(allArrived)
+		}
+		select {
+		case <-allArrived:
+		case <-time.After(5 * time.Second):
+		}
+	})
+	var logs bytes.Buffer
+	h := newHandler(t, s3.URL, options{logs: &logs})
+
+	var wg sync.WaitGroup
+	for i := range uploads {
+		wg.Go(func() { put(t, h, "hash"+strconv.Itoa(i), accessToken, "data") })
+	}
+	wg.Wait()
+
+	if got := arrived.Load(); got != uploads {
+		t.Fatalf("%d conditional PUTs, want %d", got, uploads)
+	}
+	if got := strings.Count(logs.String(), unsupportedConditionWarning); got != 1 {
+		t.Fatalf("%d unsupported-condition warnings, want 1:\n%s", got, logs.String())
 	}
 }
