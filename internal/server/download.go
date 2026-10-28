@@ -14,26 +14,20 @@ import (
 // body may stream for longer.
 const headersTimeout = 5 * time.Second
 
-func (h *handler) download(w http.ResponseWriter, r *http.Request) {
-	if h.access(r) == accessNone {
-		writeText(w, http.StatusUnauthorized, "Missing or invalid authentication token")
-		return
-	}
-	hash := r.PathValue("hash")
-
+func (h *handler) download(w http.ResponseWriter, r *http.Request, req *cacheRequest) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	timer := time.AfterFunc(headersTimeout, cancel)
-	out, err := h.s3.GetObject(ctx, &s3.GetObjectInput{Bucket: &h.cfg.Bucket, Key: &hash})
+	out, err := h.s3.GetObject(ctx, &s3.GetObjectInput{Bucket: &h.cfg.Bucket, Key: &req.hash})
 	if !timer.Stop() {
 		if err == nil {
 			_ = out.Body.Close()
 		}
-		h.storageFailure(w, r, errHeadersTimeout)
+		req.outcome = h.storageFailure(w, r, errHeadersTimeout)
 		return
 	}
 	if err != nil {
-		h.downloadFailed(w, r, err)
+		req.outcome = h.downloadFailed(w, r, err)
 		return
 	}
 	defer func() { _ = out.Body.Close() }()
@@ -43,23 +37,26 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", strconv.FormatInt(*out.ContentLength, 10))
 	}
 	w.WriteHeader(http.StatusOK)
-	if _, err := io.Copy(w, out.Body); err != nil {
-		h.log.ErrorContext(r.Context(), "Download interrupted", "hash", hash, "error", err)
+	n, err := io.Copy(w, out.Body)
+	req.bytes = n
+	if err != nil {
+		req.outcome = outcomeError
+		h.log.ErrorContext(r.Context(), "Download interrupted", "hash", req.hash, "error", err)
 		// The status is already sent; abort so the client sees a truncated
 		// response instead of a short artifact that looks complete.
 		panic(http.ErrAbortHandler)
 	}
+	req.outcome = outcomeHit
 }
 
-func (h *handler) downloadFailed(w http.ResponseWriter, r *http.Request, err error) {
+func (h *handler) downloadFailed(w http.ResponseWriter, r *http.Request, err error) outcome {
 	if httpStatus(err) != http.StatusNotFound {
-		h.storageFailure(w, r, err)
-		return
+		return h.storageFailure(w, r, err)
 	}
 	// S3 also answers 404 for a missing bucket; only a missing key is a miss.
 	if apiErrorCode(err) == "NoSuchBucket" {
-		h.storageFailure(w, r, errBucketNotFound)
-		return
+		return h.storageFailure(w, r, errBucketNotFound)
 	}
 	writeText(w, http.StatusNotFound, "The record was not found")
+	return outcomeMiss
 }

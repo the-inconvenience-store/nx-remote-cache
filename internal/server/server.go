@@ -8,6 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -48,6 +50,10 @@ type Config struct {
 	// empty the AWS SDK default credential chain is used.
 	AccessKeyID     string
 	SecretAccessKey string
+	// MaxArtifactSize, when positive, is the largest upload Content-Length in
+	// bytes. A larger upload gets 403 before its body is read; Nx continues on
+	// 403 but stops the run on 413.
+	MaxArtifactSize int64
 	// FailOpen degrades storage failures into cache misses (GET 404) and
 	// non-fatal "not stored" responses (PUT 403) instead of 503.
 	FailOpen bool
@@ -81,9 +87,62 @@ func New(ctx context.Context, cfg *Config) (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /ready", h.ready)
-	mux.HandleFunc("PUT /v1/cache/{hash}", h.upload)
-	mux.HandleFunc("GET /v1/cache/{hash}", h.download)
-	return h.logRequests(mux), nil
+	mux.HandleFunc("PUT /v1/cache/{hash}", h.cacheRoute(h.upload))
+	mux.HandleFunc("GET /v1/cache/{hash}", h.cacheRoute(h.download))
+	return h.logRequests(collapseSlashes(mux)), nil
+}
+
+// collapseSlashes changes each run of slashes in the path to one slash before
+// routing. A server URL with a trailing slash makes Nx request
+// //v1/cache/<hash>; ServeMux would redirect it, and Nx would send the upload
+// body a second time. Encoded slashes (%2F) are not changed.
+func collapseSlashes(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		escaped := r.URL.EscapedPath()
+		if !strings.Contains(escaped, "//") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		for strings.Contains(escaped, "//") {
+			escaped = strings.ReplaceAll(escaped, "//", "/")
+		}
+		// Removing slashes keeps EscapedPath's valid escaping, so this cannot fail.
+		path, _ := url.PathUnescape(escaped)
+		collapsed := new(http.Request)
+		*collapsed = *r
+		collapsed.URL = new(url.URL)
+		*collapsed.URL = *r.URL
+		collapsed.URL.Path = path
+		collapsed.URL.RawPath = escaped
+		next.ServeHTTP(w, collapsed)
+	})
+}
+
+// validHash admits Nx's decimal hashes with room for future formats, and keeps
+// path separators and other characters out of S3 keys.
+var validHash = regexp.MustCompile(`^[0-9A-Za-z_-]{1,128}$`)
+
+// cacheRoute authenticates a cache request, rejects an invalid hash before any
+// storage call, and records the hash, declared length and access for the
+// request log before serve runs.
+func (h *handler) cacheRoute(serve func(http.ResponseWriter, *http.Request, *cacheRequest)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		req := cacheRequestFrom(r.Context())
+		req.hash = r.PathValue("hash")
+		req.bytes = max(r.ContentLength, 0)
+		req.access = h.access(r)
+		if req.access == accessNone {
+			writeText(w, http.StatusUnauthorized, "Missing or invalid authentication token")
+			req.outcome = outcomeUnauthorised
+			return
+		}
+		if !validHash.MatchString(req.hash) {
+			writeText(w, http.StatusBadRequest, "Invalid hash")
+			req.outcome = outcomeBadRequest
+			return
+		}
+		serve(w, r, req)
+	}
 }
 
 func validate(cfg *Config) error {
@@ -230,17 +289,4 @@ func (s *statusRecorder) Write(p []byte) (int, error) {
 
 func (s *statusRecorder) Unwrap() http.ResponseWriter {
 	return s.ResponseWriter
-}
-
-func (h *handler) logRequests(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		rec := &statusRecorder{ResponseWriter: w}
-		next.ServeHTTP(rec, r)
-		h.log.InfoContext(r.Context(), "request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", rec.status,
-			"duration", time.Since(start))
-	})
 }

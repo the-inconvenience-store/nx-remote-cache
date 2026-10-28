@@ -127,6 +127,35 @@ func TestUploadWithoutContentLengthHeaderIsRejectedButExplicitZeroIsAllowed(t *t
 	expect(t, status, body, http.StatusOK, "Successfully uploaded")
 }
 
+// Nx stops the run on 413 but continues on 403, so an upload over the limit
+// gets 403 before the server reads its body or calls storage.
+func TestUploadOverMaximumSizeIsRejectedBeforeReadingTheBody(t *testing.T) {
+	t.Parallel()
+	s3 := newFakeS3(t)
+	var logs bytes.Buffer
+	h := newHandler(t, s3.URL, options{maxArtifactSize: 4, logs: &logs})
+
+	bodyRead := false
+	status, body := do(t, h, call{
+		method: http.MethodPut, path: "/v1/cache/big", token: accessToken,
+		body: readerFunc(func([]byte) (int, error) { bodyRead = true; return 0, io.EOF }), length: 5,
+	})
+	expect(t, status, body, http.StatusForbidden, "Artifact exceeds the maximum size; artifact not stored")
+	if bodyRead {
+		t.Fatal("server read the body of an upload over the limit")
+	}
+	if got := s3.calls.Load(); got != 0 {
+		t.Fatalf("storage received %d requests for an upload over the limit, want 0", got)
+	}
+	expectRequestLog(t, &logs, map[string]string{"status": "403", "bytes": "5", "outcome": "too-large"})
+
+	status, body = put(t, h, "exact", accessToken, "four")
+	expect(t, status, body, http.StatusOK, "Successfully uploaded")
+	if stored, _ := s3.object("exact"); string(stored) != "four" {
+		t.Fatalf("stored %q, want four", stored)
+	}
+}
+
 func TestTokenWhitespaceMatchesECMAScript(t *testing.T) {
 	t.Parallel()
 	base := server.Config{

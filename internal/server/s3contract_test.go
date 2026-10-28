@@ -5,6 +5,7 @@ package server_test
 import (
 	"context"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -35,5 +36,5 @@ func TestS3ContractConcurrentUploadsCreateOneImmutableArtifact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertAtomicUpload(t, h, "s3contract-"+time.Now().UTC().Format("20060102T150405.000000000"))
+	assertAtomicUpload(t, h, "s3contract-"+strconv.FormatInt(time.Now().UnixNano(), 10))
 }

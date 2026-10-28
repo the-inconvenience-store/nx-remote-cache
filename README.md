@@ -38,6 +38,7 @@ Invalid configuration prints an error to stderr and exits with status 1. See
 | `AWS_ACCESS_KEY_ID` | no | unset | Set both AWS keys or neither. Neither → AWS SDK default credential chain. |
 | `AWS_SECRET_ACCESS_KEY` | no | unset | See above. |
 | `NX_CACHE_FAIL_OPEN` | no | `true` | `true` or `false`; anything else is an error. See [Cache outages](#cache-outages). |
+| `NX_CACHE_MAX_ARTIFACT_BYTES` | no | `0` (no limit) | Largest upload `Content-Length` in bytes; a whole number of 0 or more, anything else is an error. A larger upload gets 403 and is not stored. See [Streaming uploads](#streaming-uploads). |
 | `TLS_CERT_PATH` | no | unset | PEM certificate. Set both TLS paths or neither; both → HTTPS. |
 | `TLS_KEY_PATH` | no | unset | PEM private key. |
 
@@ -47,11 +48,13 @@ Invalid configuration prints an error to stderr and exits with status 1. See
 | --- | --- | --- |
 | `GET /health` | none | 200 `OK` (process liveness; never touches storage) |
 | `GET /ready` | none | 200 `OK`, or 503 `Storage unavailable` when `HeadBucket` fails within 2s |
-| `PUT /v1/cache/{hash}` | access token | 200, 401, 403, 409, 411, 500, 503 |
-| `GET /v1/cache/{hash}` | either token | 200 (`application/octet-stream`), 401, 404, 503 |
+| `PUT /v1/cache/{hash}` | access token | 200, 400, 401, 403, 409, 411, 500, 503 |
+| `GET /v1/cache/{hash}` | either token | 200 (`application/octet-stream`), 400, 401, 404, 503 |
 
 Cache routes require `Authorization: Bearer <token>`; anything else returns 401
-`Missing or invalid authentication token`. Response bodies are plain text.
+`Missing or invalid authentication token`. A hash must match
+`^[0-9A-Za-z_-]{1,128}$`; any other hash returns 400 `Invalid hash` without a
+storage request. Response bodies are plain text.
 
 ## Running
 
@@ -99,6 +102,10 @@ Set these variables wherever Nx runs:
 NX_SELF_HOSTED_REMOTE_CACHE_SERVER=http://your-server:3000
 NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN=your-secure-token
 ```
+
+A trailing slash in the server URL also works: the server changes each `//` in
+the request path to `/` before routing, without a redirect. The server has no
+base path setting; use an ingress to remove a path prefix.
 
 ### Trusted writers and read-only clients
 
@@ -237,6 +244,13 @@ The S3 client keeps up to 256 idle connections, so the burst of parallel
 downloads at the start of an Nx run reuses storage connections instead of
 opening and closing one per request.
 
+Set `NX_CACHE_MAX_ARTIFACT_BYTES` to limit the artifact size. The server
+compares the limit with `Content-Length` before it reads the body or contacts
+storage. A larger upload returns 403 `Artifact exceeds the maximum size;
+artifact not stored`, and nothing is stored. The status is 403, not 413,
+because Nx continues the run after a 403 but stops it on 413. An upload exactly
+at the limit is accepted. The default, `0`, sets no limit.
+
 ## Upload compatibility
 
 Uploads first check for an existing object with `HeadObject` (409 if present),
@@ -306,6 +320,33 @@ The server cannot protect against these failures:
   replica behind the readiness probe.
 - Nx has no setting that makes cache errors non-fatal. `skipRemoteCache`
   disables the remote cache entirely.
+
+## Request log
+
+Each request logs one `msg=request` line with `method`, `path`, `status`, and
+`duration`. Cache requests add:
+
+- `hash`: the requested hash.
+- `bytes`: the artifact size; the declared `Content-Length` of an upload, or the
+  bytes sent for a download.
+- `access`: `rw` for the access token, `ro` for the read-only token; absent when
+  the token is missing or invalid.
+- `outcome`: what happened to the request.
+
+| Outcome | Meaning |
+| --- | --- |
+| `hit` | `GET` sent the artifact. |
+| `miss` | `GET` found no artifact (404). |
+| `stored` | `PUT` stored the artifact. |
+| `conflict` | `PUT` for a hash that already exists (409). |
+| `read-only` | `PUT` with the read-only token (403). |
+| `degraded` | Storage failed and the server answered a miss (404) or "not stored" (403); see [Cache outages](#cache-outages). |
+| `unauthorised` | Missing or invalid token (401). |
+| `bad-request` | The request is not valid: an invalid hash (400) or no `Content-Length` (411). |
+| `too-large` | `PUT` with a `Content-Length` over `NX_CACHE_MAX_ARTIFACT_BYTES` (403). |
+| `error` | 503 when `NX_CACHE_FAIL_OPEN=false`, an upload the client aborted (500), or a download interrupted after it started. |
+
+Tokens are never logged.
 
 ## Development
 

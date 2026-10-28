@@ -70,6 +70,10 @@ func loadSettings(lookup lookupFunc) (settings, error) {
 	if err != nil {
 		return settings{}, err
 	}
+	maxArtifactSize, err := parseMaxArtifactSize(lookup)
+	if err != nil {
+		return settings{}, err
+	}
 	failOpen, err := parseFailOpen(lookup)
 	if err != nil {
 		return settings{}, err
@@ -103,6 +107,7 @@ func loadSettings(lookup lookupFunc) (settings, error) {
 			AccessKeyID:     keyID,
 			SecretAccessKey: secret,
 			FailOpen:        failOpen,
+			MaxArtifactSize: maxArtifactSize,
 		},
 	}, nil
 }
@@ -137,6 +142,22 @@ func parsePort(raw string) (int, error) {
 		return 0, errPort
 	}
 	return port, nil
+}
+
+var errMaxArtifactSize = errors.New("NX_CACHE_MAX_ARTIFACT_BYTES must be a whole number of 0 or more")
+
+// parseMaxArtifactSize returns 0 (no limit) only when the variable is unset;
+// any value must be a whole number of 0 or more.
+func parseMaxArtifactSize(lookup lookupFunc) (int64, error) {
+	value, ok := lookup("NX_CACHE_MAX_ARTIFACT_BYTES")
+	if !ok {
+		return 0, nil
+	}
+	size, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || size < 0 {
+		return 0, errMaxArtifactSize
+	}
+	return size, nil
 }
 
 // parseFailOpen defaults only when the variable is unset; an empty value is an error.

@@ -135,6 +135,7 @@ helm install nx-cache oci://ghcr.io/the-inconvenience-store/charts/nx-remote-cac
 | `probes.readiness.timeoutSeconds` | `3` | Must exceed the 2s bucket check |
 | `config.port` | `3000` | `PORT` |
 | `config.failOpen` | `true` | `NX_CACHE_FAIL_OPEN`; `false` returns 503 on storage failures |
+| `config.maxArtifactBytes` | `0` | `NX_CACHE_MAX_ARTIFACT_BYTES`; `0` is no limit; larger uploads get 403 and are not stored; anything but a whole number of 0 or more stops startup |
 | `config.awsRegion` | `us-east-1` | `AWS_REGION` |
 | `config.s3.bucketName` | `nx-cloud` | `S3_BUCKET_NAME` |
 | `config.s3.endpointUrl` | `""` | `S3_ENDPOINT_URL`; omitted when empty (AWS S3) |

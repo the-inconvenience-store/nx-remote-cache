@@ -40,6 +40,12 @@ mise pins all tools and runs tasks (`mise run <task>`):
   Plain-text bodies. S3 transport keeps up to 256 idle connections (SDK
   default 10 per host) so Nx's burst of parallel GETs reuses connections;
   SDK timeouts and retries otherwise unchanged.
+- Cache request checks (`internal/server`): each `//` in the path becomes `/`
+  before routing (no 307); after auth the hash must match
+  `^[0-9A-Za-z_-]{1,128}$` (else 400); an upload whose Content-Length exceeds
+  `NX_CACHE_MAX_ARTIFACT_BYTES` gets 403 before its body is read. Each cache
+  request records one `outcome` (`requestlog.go`) on its request log line with
+  `hash`, `bytes`, `access`; never token text.
 - `internal` must not import `cmd`.
 
 ## Testing
@@ -61,7 +67,8 @@ comma-separated token lists; empty item, duplicate or overlap → startup error)
 `S3_ENDPOINT_URL`, `S3_FORCE_PATH_STYLE` (`true`|`false`; unset → path-style
 only with an endpoint), `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (both or
 neither; neither → default credential chain), `NX_CACHE_FAIL_OPEN` (true),
-`TLS_CERT_PATH` + `TLS_KEY_PATH` (both or neither). See README for rules.
+`TLS_CERT_PATH` + `TLS_KEY_PATH` (both or neither), `NX_CACHE_MAX_ARTIFACT_BYTES`
+(0 = no limit). See README for rules.
 
 ## CI
 

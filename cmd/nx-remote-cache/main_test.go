@@ -106,6 +106,29 @@ func TestLoadSettingsRejectsInvalidConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoadSettingsReadsMaxArtifactBytes(t *testing.T) {
+	t.Parallel()
+	s, err := loadSettings(env(validEnv()))
+	if err != nil || s.server.MaxArtifactSize != 0 {
+		t.Fatalf("unset: got %d, %v; want 0 (no limit)", s.server.MaxArtifactSize, err)
+	}
+	for value, want := range map[string]int64{"0": 0, "52428800": 52428800, "5368709120": 5368709120} {
+		values := validEnv()
+		values["NX_CACHE_MAX_ARTIFACT_BYTES"] = value
+		s, err := loadSettings(env(values))
+		if err != nil || s.server.MaxArtifactSize != want {
+			t.Errorf("NX_CACHE_MAX_ARTIFACT_BYTES=%q: got %d, %v; want %d", value, s.server.MaxArtifactSize, err, want)
+		}
+	}
+	for _, value := range []string{"", "abc", "-1", "1.5", "1e6", " 5", "99999999999999999999"} {
+		values := validEnv()
+		values["NX_CACHE_MAX_ARTIFACT_BYTES"] = value
+		if _, err := loadSettings(env(values)); !errors.Is(err, errMaxArtifactSize) {
+			t.Errorf("NX_CACHE_MAX_ARTIFACT_BYTES=%q: got %v, want %v", value, err, errMaxArtifactSize)
+		}
+	}
+}
+
 func TestRunRejectsInvalidServerConfiguration(t *testing.T) {
 	t.Parallel()
 	cases := map[string]struct {

@@ -116,17 +116,19 @@ func unsupportedCondition(err error) bool {
 // storageFailure answers a request whose storage call failed. Nx treats only
 // GET 404 as a miss and only PUT 403/409 as non-fatal, so by default (fail-open)
 // outages degrade instead of failing the Nx run. Every degradation is logged.
-func (h *handler) storageFailure(w http.ResponseWriter, r *http.Request, err error) {
+func (h *handler) storageFailure(w http.ResponseWriter, r *http.Request, err error) outcome {
 	h.log.ErrorContext(r.Context(), "Storage unavailable",
 		"method", r.Method, "hash", r.PathValue("hash"), "error", err)
 	switch {
 	case !h.cfg.FailOpen:
 		writeText(w, http.StatusServiceUnavailable, "Cache storage unavailable")
+		return outcomeError
 	case r.Method == http.MethodPut:
 		writeNotStored(w)
 	default:
 		writeText(w, http.StatusNotFound, "The record was not found")
 	}
+	return outcomeDegraded
 }
 
 func writeNotStored(w http.ResponseWriter) {
