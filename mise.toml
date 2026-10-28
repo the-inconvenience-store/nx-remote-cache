@@ -38,11 +38,11 @@ run = "go test -race ./..."
 
 [tasks.test-integration]
 description = "Integration tests against Garage via testcontainers (needs Docker)"
-run = "go test -race -tags integration -count=1 ./internal/..."
+run = 'DOCKER_HOST="${DOCKER_HOST:-$(docker context inspect --format "{% raw %}{{.Endpoints.docker.Host}}{% endraw %}")}" go test -race -tags integration -count=1 ./internal/...'
 
 [tasks.e2e]
 description = "Real Nx 23.3 builds against the server and Garage (needs Docker and Node)"
-run = "go test -tags e2e -count=1 -timeout 20m ./e2e/..."
+run = 'DOCKER_HOST="${DOCKER_HOST:-$(docker context inspect --format "{% raw %}{{.Endpoints.docker.Host}}{% endraw %}")}" go test -tags e2e -count=1 -timeout 20m ./e2e/...'
 
 [tasks.test-s3]
 description = "Optional atomic-write contract against a real S3 bucket (configure AWS_* and S3_* env)"
