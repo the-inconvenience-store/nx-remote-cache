@@ -53,6 +53,7 @@ func TestLoadSettingsRejectsInvalidConfiguration(t *testing.T) {
 		"bad port":            {"PORT", "http", errPort},
 		"port out of range":   {"PORT", "70000", errPort},
 		"bad fail-open":       {"NX_CACHE_FAIL_OPEN", "maybe", errFailOpen},
+		"empty fail-open":     {"NX_CACHE_FAIL_OPEN", "", errFailOpen},
 		"empty read token":    {"NX_CACHE_READ_ONLY_TOKEN", "", server.ErrReadOnlyToken},
 		"cert without key":    {"TLS_CERT_PATH", "testdata/cert.pem", errTLSPair},
 		"unreadable key pair": {"TLS_KEY_PATH", "missing.pem", errTLSPair},

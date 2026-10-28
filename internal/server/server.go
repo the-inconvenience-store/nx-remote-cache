@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-	"unicode"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
@@ -101,7 +100,19 @@ func validate(cfg *Config) error {
 }
 
 func wellFormedToken(token string) bool {
-	return token != "" && !strings.ContainsFunc(token, unicode.IsSpace)
+	return token != "" && !strings.ContainsFunc(token, ecmaSpace)
+}
+
+// ecmaSpace matches JavaScript's \s, keeping token rules identical to the
+// original server (unicode.IsSpace differs on U+0085 and U+FEFF).
+func ecmaSpace(r rune) bool {
+	switch r {
+	case '\t', '\n', '\v', '\f', '\r', ' ', '\u00a0', '\u1680', '\u2028', '\u2029',
+		'\u202f', '\u205f', '\u3000', '\ufeff':
+		return true
+	default:
+		return r >= '\u2000' && r <= '\u200a'
+	}
 }
 
 type access int

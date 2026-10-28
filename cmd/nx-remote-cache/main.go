@@ -116,8 +116,13 @@ func parsePort(raw string) (int, error) {
 	return port, nil
 }
 
+// parseFailOpen defaults only when the variable is unset; an empty value is an error.
 func parseFailOpen(lookup lookupFunc) (bool, error) {
-	switch valueOr(lookup, "NX_CACHE_FAIL_OPEN", "true") {
+	value, ok := lookup("NX_CACHE_FAIL_OPEN")
+	if !ok {
+		return true, nil
+	}
+	switch value {
 	case "true":
 		return true, nil
 	case "false":

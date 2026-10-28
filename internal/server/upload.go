@@ -20,7 +20,9 @@ func (h *handler) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	case accessWrite:
 	}
-	if r.ContentLength < 0 {
+	// Go reports a request with neither Content-Length nor Transfer-Encoding as
+	// length 0, so the header itself must be present.
+	if r.ContentLength < 0 || r.Header.Get("Content-Length") == "" {
 		writeText(w, http.StatusLengthRequired, "Content-Length header is required")
 		return
 	}

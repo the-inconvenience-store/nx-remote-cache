@@ -91,9 +91,61 @@ func TestUnsupportedConditionLosesOneArtifactThenUploadsUnconditionally(t *testi
 
 func TestUnrelatedInvalidRequestIsNotTreatedAsUnsupportedCondition(t *testing.T) {
 	t.Parallel()
-	h := newHandler(t, failingS3(t, http.StatusBadRequest, "InvalidRequest"), options{failOpen: new(false)})
-	status, body := put(t, h, "abc", accessToken, "data")
-	expect(t, status, body, http.StatusServiceUnavailable, "Cache storage unavailable")
+	s3 := newFakeS3(t)
+	var conditionalPuts atomic.Int32
+	s3.override = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Method != http.MethodPut {
+			return false
+		}
+		if r.Header.Get("If-None-Match") == "*" {
+			conditionalPuts.Add(1)
+		}
+		_, _ = io.Copy(io.Discard, r.Body)
+		writeS3Error(w, http.StatusBadRequest, "InvalidRequest", "Invalid checksum")
+		return true
+	}
+	h := newHandler(t, s3.URL, options{failOpen: new(false)})
+	for range 2 {
+		status, body := put(t, h, "abc", accessToken, "data")
+		expect(t, status, body, http.StatusServiceUnavailable, "Cache storage unavailable")
+	}
+	if got := conditionalPuts.Load(); got != 2 {
+		t.Fatalf("%d of 2 PUTs were conditional; an unrelated error disabled If-None-Match", got)
+	}
+}
+
+func TestUploadWithoutContentLengthHeaderIsRejectedButExplicitZeroIsAllowed(t *testing.T) {
+	t.Parallel()
+	s3 := newFakeS3(t)
+	h := newHandler(t, s3.URL, options{})
+	status, body := do(t, h, call{method: http.MethodPut, path: "/v1/cache/absent", token: accessToken})
+	expect(t, status, body, http.StatusLengthRequired, "Content-Length header is required")
+	if _, stored := s3.object("absent"); stored {
+		t.Fatal("upload without Content-Length reached storage")
+	}
+	status, body = put(t, h, "empty", accessToken, "")
+	expect(t, status, body, http.StatusOK, "Successfully uploaded")
+}
+
+func TestTokenWhitespaceMatchesECMAScript(t *testing.T) {
+	t.Parallel()
+	base := server.Config{
+		AccessToken:     "trusted",
+		Bucket:          "b",
+		Region:          "us-east-1",
+		AccessKeyID:     "k",
+		SecretAccessKey: "s",
+	}
+	accepted := base
+	accepted.AccessToken = "a\u0085b" // not whitespace for JavaScript's \s
+	if _, err := server.New(context.Background(), &accepted); err != nil {
+		t.Fatalf("token with U+0085 rejected: %v", err)
+	}
+	rejected := base
+	rejected.AccessToken = "a\ufeffb" // whitespace for JavaScript's \s
+	if _, err := server.New(context.Background(), &rejected); !errors.Is(err, server.ErrAccessToken) {
+		t.Fatalf("token with U+FEFF: got %v, want %v", err, server.ErrAccessToken)
+	}
 }
 
 func TestStorageReceivesUploadBytesBeforeClientFinishes(t *testing.T) {

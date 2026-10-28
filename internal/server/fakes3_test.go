@@ -174,6 +174,10 @@ func doWithHeader(t *testing.T, h http.Handler, c call, authorization string) (i
 	t.Helper()
 	req := httptest.NewRequestWithContext(t.Context(), c.method, c.path, c.body)
 	req.ContentLength = c.length
+	// A real server only sees the header when the client sent one.
+	if c.body != nil && c.length >= 0 {
+		req.Header.Set("Content-Length", strconv.FormatInt(c.length, 10))
+	}
 	if authorization != "" {
 		req.Header.Set("Authorization", authorization)
 	}
