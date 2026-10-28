@@ -57,28 +57,29 @@ type handler struct {
 }
 
 // New validates cfg and returns the cache server's HTTP handler.
-func New(ctx context.Context, cfg Config) (http.Handler, error) {
+func New(ctx context.Context, cfg *Config) (http.Handler, error) {
 	if err := validate(cfg); err != nil {
 		return nil, err
 	}
-	if cfg.Logger == nil {
-		cfg.Logger = slog.Default()
+	h := &handler{cfg: *cfg, log: cfg.Logger}
+	if h.log == nil {
+		h.log = slog.Default()
 	}
 	client, err := newS3Client(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
-	h := &handler{cfg: cfg, s3: client, log: cfg.Logger}
+	h.s3 = client
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", h.health)
+	mux.HandleFunc("GET /health", health)
 	mux.HandleFunc("GET /ready", h.ready)
 	mux.HandleFunc("PUT /v1/cache/{hash}", h.upload)
 	mux.HandleFunc("GET /v1/cache/{hash}", h.download)
 	return h.logRequests(mux), nil
 }
 
-func validate(cfg Config) error {
+func validate(cfg *Config) error {
 	if !wellFormedToken(cfg.AccessToken) {
 		return ErrAccessToken
 	}
@@ -129,7 +130,7 @@ func tokensEqual(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
-func (h *handler) health(w http.ResponseWriter, _ *http.Request) {
+func health(w http.ResponseWriter, _ *http.Request) {
 	writeText(w, http.StatusOK, "OK")
 }
 
@@ -180,13 +181,11 @@ func (h *handler) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w}
-		defer func() {
-			h.log.InfoContext(r.Context(), "request",
-				"method", r.Method,
-				"path", r.URL.Path,
-				"status", rec.status,
-				"duration", time.Since(start))
-		}()
 		next.ServeHTTP(rec, r)
+		h.log.InfoContext(r.Context(), "request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", rec.status,
+			"duration", time.Since(start))
 	})
 }

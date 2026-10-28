@@ -142,7 +142,11 @@ func TestStorageReceivesUploadBytesBeforeClientFinishes(t *testing.T) {
 		chunks = chunks[1:]
 		return n, nil
 	})
-	status, resp := do(t, h, call{method: http.MethodPut, path: "/v1/cache/abc", token: accessToken, body: body, length: 9})
+	status, resp := do(
+		t,
+		h,
+		call{method: http.MethodPut, path: "/v1/cache/abc", token: accessToken, body: body, length: 9},
+	)
 	expect(t, status, resp, http.StatusOK, "Successfully uploaded")
 }
 
@@ -152,7 +156,11 @@ func TestClientBodyErrorAbortsUploadWithoutStoring(t *testing.T) {
 	var logs bytes.Buffer
 	h := newHandler(t, s3.URL, options{logs: &logs})
 	body := readerFunc(func([]byte) (int, error) { return 0, errClientGone })
-	status, resp := do(t, h, call{method: http.MethodPut, path: "/v1/cache/abc", token: accessToken, body: body, length: 15})
+	status, resp := do(
+		t,
+		h,
+		call{method: http.MethodPut, path: "/v1/cache/abc", token: accessToken, body: body, length: 15},
+	)
 	expect(t, status, resp, http.StatusInternalServerError, "Internal server error")
 	if _, stored := s3.object("abc"); stored {
 		t.Fatal("aborted upload was stored")
@@ -179,7 +187,11 @@ func TestStorageRejectionStopsReadingTheClientBody(t *testing.T) {
 		return len(p), nil
 	})
 	const declared = 1 << 30
-	status, resp := do(t, h, call{method: http.MethodPut, path: "/v1/cache/abc", token: accessToken, body: body, length: declared})
+	status, resp := do(
+		t,
+		h,
+		call{method: http.MethodPut, path: "/v1/cache/abc", token: accessToken, body: body, length: declared},
+	)
 	expect(t, status, resp, http.StatusForbidden, "Cache storage unavailable; artifact not stored")
 	if served.Load() >= declared {
 		t.Fatal("server read the whole 1 GiB body after storage rejected it")
@@ -188,7 +200,13 @@ func TestStorageRejectionStopsReadingTheClientBody(t *testing.T) {
 
 func TestNewRejectsInvalidCredentialsConfiguration(t *testing.T) {
 	t.Parallel()
-	base := server.Config{AccessToken: "trusted", Bucket: "b", Region: "us-east-1", AccessKeyID: "k", SecretAccessKey: "s"}
+	base := server.Config{
+		AccessToken:     "trusted",
+		Bucket:          "b",
+		Region:          "us-east-1",
+		AccessKeyID:     "k",
+		SecretAccessKey: "s",
+	}
 	cases := map[string]struct {
 		mutate func(*server.Config)
 		want   error
@@ -203,7 +221,7 @@ func TestNewRejectsInvalidCredentialsConfiguration(t *testing.T) {
 	for name, tc := range cases {
 		cfg := base
 		tc.mutate(&cfg)
-		if _, err := server.New(context.Background(), cfg); !errors.Is(err, tc.want) {
+		if _, err := server.New(context.Background(), &cfg); !errors.Is(err, tc.want) {
 			t.Errorf("%s: got %v, want %v", name, err, tc.want)
 		}
 	}

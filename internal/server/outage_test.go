@@ -15,7 +15,7 @@ import (
 
 func unreachableEndpoint(t *testing.T) string {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestMissingBucketIsAStorageFailureNotAMiss(t *testing.T) {
 	t.Parallel()
 	s3 := newFakeS3(t)
 	var logs bytes.Buffer
-	h, err := server.New(context.Background(), server.Config{
+	h, err := server.New(context.Background(), &server.Config{
 		AccessToken: accessToken, Bucket: "does-not-exist", Region: "us-east-1",
 		Endpoint: s3.URL, AccessKeyID: "test", SecretAccessKey: "test", FailOpen: false,
 		Logger: testLogger(&logs),
@@ -164,7 +164,9 @@ func TestDownloadBodyMayStreamPastHeaderTimeout(t *testing.T) {
 			return false
 		}
 		_, _ = io.WriteString(w, "first,")
-		w.(http.Flusher).Flush()
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
 		// Real clock on purpose: the body must outlive the 5s header deadline.
 		time.Sleep(5500 * time.Millisecond)
 		_, _ = io.WriteString(w, "last")

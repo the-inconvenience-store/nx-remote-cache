@@ -24,14 +24,13 @@ const (
 )
 
 var (
-	errBucketNotFound   = errors.New("S3 bucket not found")
-	errHeadersTimeout   = errors.New("S3 sent no response headers in time")
-	conditionalHeader   = regexp.MustCompile(`(?i)if[- ]?none[- ]?match|conditional (writes?|puts?)`)
-	unsupportedFeature  = regexp.MustCompile(`(?i)not (supported|implemented)|unsupported`)
-	unsupportedRequests = map[string]bool{"InvalidRequest": true, "InvalidArgument": true, "UnsupportedOperation": true}
+	errBucketNotFound  = errors.New("S3 bucket not found")
+	errHeadersTimeout  = errors.New("S3 sent no response headers in time")
+	conditionalHeader  = regexp.MustCompile(`(?i)if[- ]?none[- ]?match|conditional (writes?|puts?)`)
+	unsupportedFeature = regexp.MustCompile(`(?i)not (supported|implemented)|unsupported`)
 )
 
-func newS3Client(ctx context.Context, cfg Config) (*s3.Client, error) {
+func newS3Client(ctx context.Context, cfg *Config) (*s3.Client, error) {
 	httpClient := awshttp.NewBuildableClient().
 		WithDialerOptions(func(d *net.Dialer) { d.Timeout = dialTimeout }).
 		WithTransportOptions(func(t *http.Transport) {
@@ -63,16 +62,14 @@ func newS3Client(ctx context.Context, cfg Config) (*s3.Client, error) {
 }
 
 func httpStatus(err error) int {
-	var responseErr *awshttp.ResponseError
-	if errors.As(err, &responseErr) {
+	if responseErr, ok := errors.AsType[*awshttp.ResponseError](err); ok {
 		return responseErr.HTTPStatusCode()
 	}
 	return 0
 }
 
 func apiErrorCode(err error) string {
-	var apiErr smithy.APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[smithy.APIError](err); ok {
 		return apiErr.ErrorCode()
 	}
 	return ""
@@ -81,17 +78,19 @@ func apiErrorCode(err error) string {
 // unsupportedCondition reports whether storage explicitly rejected the
 // If-None-Match precondition as a capability it does not implement.
 func unsupportedCondition(err error) bool {
-	var apiErr smithy.APIError
-	if !errors.As(err, &apiErr) {
+	apiErr, ok := errors.AsType[smithy.APIError](err)
+	if !ok {
 		return false
 	}
-	if apiErr.ErrorCode() == "NotImplemented" {
+	switch apiErr.ErrorCode() {
+	case "NotImplemented":
 		return true
+	case "InvalidRequest", "InvalidArgument", "UnsupportedOperation":
+		message := apiErr.ErrorMessage()
+		return conditionalHeader.MatchString(message) && unsupportedFeature.MatchString(message)
+	default:
+		return false
 	}
-	message := apiErr.ErrorMessage()
-	return unsupportedRequests[apiErr.ErrorCode()] &&
-		conditionalHeader.MatchString(message) &&
-		unsupportedFeature.MatchString(message)
 }
 
 // storageFailure answers a request whose storage call failed. Nx treats only

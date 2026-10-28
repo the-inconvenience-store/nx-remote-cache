@@ -134,7 +134,7 @@ func newHandler(t *testing.T, endpoint string, opts options) http.Handler {
 	if opts.readOnly {
 		cfg.ReadOnlyToken = readOnlyToken
 	}
-	h, err := server.New(context.Background(), cfg)
+	h, err := server.New(context.Background(), &cfg)
 	if err != nil {
 		t.Fatalf("server.New: %v", err)
 	}
@@ -172,7 +172,7 @@ func do(t *testing.T, h http.Handler, c call) (int, string) {
 
 func doWithHeader(t *testing.T, h http.Handler, c call, authorization string) (int, string) {
 	t.Helper()
-	req := httptest.NewRequest(c.method, c.path, c.body)
+	req := httptest.NewRequestWithContext(t.Context(), c.method, c.path, c.body)
 	req.ContentLength = c.length
 	if authorization != "" {
 		req.Header.Set("Authorization", authorization)
