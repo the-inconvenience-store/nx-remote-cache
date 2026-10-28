@@ -164,6 +164,7 @@ func TestTokenWhitespaceMatchesECMAScript(t *testing.T) {
 		Region:          "us-east-1",
 		AccessKeyID:     "k",
 		SecretAccessKey: "s",
+		StallTimeout:    time.Minute,
 	}
 	accepted := base
 	accepted.AccessTokens = []string{"a\u0085b"} // not whitespace for JavaScript's \s
@@ -287,6 +288,7 @@ func TestNewRejectsInvalidCredentialsConfiguration(t *testing.T) {
 		Region:          "us-east-1",
 		AccessKeyID:     "k",
 		SecretAccessKey: "s",
+		StallTimeout:    time.Minute,
 	}
 	cases := map[string]struct {
 		mutate func(*server.Config)
@@ -320,8 +322,12 @@ func TestNewRejectsInvalidCredentialsConfiguration(t *testing.T) {
 		"duplicate read token": {
 			func(c *server.Config) { c.ReadOnlyTokens = []string{"r", "r"} }, server.ErrDuplicateToken,
 		},
-		"only key id": {func(c *server.Config) { c.SecretAccessKey = "" }, server.ErrAWSCredentials},
-		"only secret": {func(c *server.Config) { c.AccessKeyID = "" }, server.ErrAWSCredentials},
+		"only key id":        {func(c *server.Config) { c.SecretAccessKey = "" }, server.ErrAWSCredentials},
+		"only secret":        {func(c *server.Config) { c.AccessKeyID = "" }, server.ErrAWSCredentials},
+		"zero stall timeout": {func(c *server.Config) { c.StallTimeout = 0 }, server.ErrStallTimeout},
+		"negative stall timeout": {
+			func(c *server.Config) { c.StallTimeout = -time.Second }, server.ErrStallTimeout,
+		},
 	}
 	for name, tc := range cases {
 		cfg := base

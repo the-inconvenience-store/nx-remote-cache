@@ -76,6 +76,8 @@ spec:
             - name: NX_CACHE_MAX_ARTIFACT_BYTES
               value: {{ $maxArtifactBytes | toString | quote }}
             {{- end }}
+            - name: NX_CACHE_STALL_TIMEOUT
+              value: {{ .Values.config.stallTimeout | quote }}
             - name: NX_CACHE_ACCESS_TOKEN
               valueFrom:
                 secretKeyRef:

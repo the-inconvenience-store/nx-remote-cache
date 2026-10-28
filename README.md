@@ -16,6 +16,8 @@ lives in [`docs/nx-remote-cache.openapi.json`](docs/nx-remote-cache.openapi.json
   stop concurrent overwrites.
 - Optional read-only token for untrusted CI jobs.
 - Graceful degradation during storage outages so Nx keeps building.
+- Stalled S3 transfers stop after a configurable time without bytes, so they
+  cannot hang the Nx run.
 - `/health` liveness and `/ready` storage-readiness endpoints.
 - Prometheus metrics on a separate port.
 - Static AWS keys or the AWS default credential chain (IRSA, instance profile).
@@ -41,6 +43,7 @@ Invalid configuration prints an error to stderr and exits with status 1. See
 | `AWS_SECRET_ACCESS_KEY` | no | unset | See above. |
 | `NX_CACHE_FAIL_OPEN` | no | `true` | `true` or `false`; anything else is an error. See [Cache outages](#cache-outages). |
 | `NX_CACHE_MAX_ARTIFACT_BYTES` | no | `0` (no limit) | Largest upload `Content-Length` in bytes; a whole number of 0 or more, anything else is an error. A larger upload gets 403 and is not stored. See [Streaming uploads](#streaming-uploads). |
+| `NX_CACHE_STALL_TIMEOUT` | no | `60s` | Stop a transfer when the server receives no bytes of it for this long. A [Go duration](https://pkg.go.dev/time#ParseDuration) greater than zero, such as `30s` or `2m`; anything else, including empty, is an error. See [Stalled transfers](#stalled-transfers). |
 | `TLS_CERT_PATH` | no | unset | PEM certificate. Set both TLS paths or neither; both → HTTPS. |
 | `TLS_KEY_PATH` | no | unset | PEM private key. |
 
@@ -322,11 +325,46 @@ upload duplicate check already requires.
 The server cannot protect against these failures:
 
 - A storage failure after a download has started streaming truncates the
-  response, and Nx fails the run.
+  response, and Nx fails the run. This includes a download stopped by the
+  [stall timeout](#stalled-transfers).
 - If the cache server itself is unreachable, Nx fails the run. Run more than one
   replica behind the readiness probe.
 - Nx has no setting that makes cache errors non-fatal. `skipRemoteCache`
   disables the remote cache entirely.
+
+## Stalled transfers
+
+Nx's cache client has no read or total timeout, so a transfer that stops
+without an error would hang the Nx run. The server stops an artifact transfer
+when it receives no bytes of it for `NX_CACHE_STALL_TIMEOUT` (default `60s`).
+The clock restarts with each chunk the server receives: from S3 for a
+download, from Nx for an upload. A slow transfer that keeps moving is never
+stopped, and there is no limit on the total transfer time.
+
+The server stops receiving when either end stops: the sender stops sending, or
+the receiver stops taking bytes and the connection buffers fill. A client that
+stops sending an upload therefore stalls it too, because storage receives
+nothing. When the clock runs out, the server cancels the S3 request, releases
+any read or write blocked on the Nx connection, and answers by the side it was
+waiting on:
+
+| Request | Side | Cause | Response | Outcome |
+| --- | --- | --- | --- | --- |
+| `GET` | `storage` | S3 stopped sending the artifact. | The started response is cut off, and Nx fails the run instead of hanging. | `error` |
+| `GET` | `client` | Nx stopped reading the response. | The response is cut off. | `error` |
+| `PUT` | `storage` | S3 stopped taking the body, or did not answer. | A storage failure: 403 `Cache storage unavailable; artifact not stored` with fail-open, else 503. | `degraded` or `error` |
+| `PUT` | `client` | Nx stopped sending the body. | 500 `Internal server error`, as for an aborted upload. | `error` |
+
+Nothing is stored from a stopped upload. Each stopped transfer logs
+`msg="Transfer stalled"` with `method`, `hash`, `side`, and `timeout`, and
+increments `nx_cache_stalled_transfers_total`. A stalled upload to storage also
+logs `msg="Storage unavailable"`, like every degraded response.
+
+The stall clock starts when the artifact transfer starts: for a download, when
+S3 has sent its response headers (S3 has 5 seconds to send them); for an
+upload, when the server starts the S3 `PutObject` after the duplicate check.
+For an upload it runs until S3 answers. Separately, the S3 client waits at most
+30 seconds for S3 to answer once the body is sent.
 
 ## Request log
 
@@ -351,7 +389,7 @@ Each request logs one `msg=request` line with `method`, `path`, `status`, and
 | `unauthorised` | Missing or invalid token (401). |
 | `bad-request` | The request is not valid: an invalid hash (400) or no `Content-Length` (411). |
 | `too-large` | `PUT` with a `Content-Length` over `NX_CACHE_MAX_ARTIFACT_BYTES` (403). |
-| `error` | 503 when `NX_CACHE_FAIL_OPEN=false`, an upload the client aborted (500), or a download interrupted after it started. |
+| `error` | 503 when `NX_CACHE_FAIL_OPEN=false`, an upload the client aborted or [stalled](#stalled-transfers) (500), or a download interrupted or stalled after it started. |
 
 Tokens are never logged.
 
@@ -366,6 +404,7 @@ port has no authentication and no TLS; keep it on the internal network.
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
 | `nx_cache_requests_total` | counter | `method`, `outcome` | Cache requests by HTTP method and [outcome](#request-log). |
+| `nx_cache_stalled_transfers_total` | counter | `method`, `side` | Transfers stopped by the [stall timeout](#stalled-transfers), by HTTP method and the side the server was waiting on: `storage` or `client`. |
 
 The standard Go runtime (`go_*`) and process (`process_*`) metrics are also
 served.

@@ -32,6 +32,8 @@ const (
 	maxPort         = 65535
 	// defaultMetricsPort is used when METRICS_PORT is unset.
 	defaultMetricsPort = 9090
+	// defaultStallTimeout is used when NX_CACHE_STALL_TIMEOUT is unset.
+	defaultStallTimeout = 60 * time.Second
 )
 
 var (
@@ -99,6 +101,10 @@ func loadSettings(lookup lookupFunc) (settings, error) {
 	if err != nil {
 		return settings{}, err
 	}
+	stallTimeout, err := parseStallTimeout(lookup)
+	if err != nil {
+		return settings{}, err
+	}
 	addressStyle, err := parseAddressStyle(lookup)
 	if err != nil {
 		return settings{}, err
@@ -130,6 +136,7 @@ func loadSettings(lookup lookupFunc) (settings, error) {
 			SecretAccessKey: secret,
 			FailOpen:        failOpen,
 			MaxArtifactSize: maxArtifactSize,
+			StallTimeout:    stallTimeout,
 		},
 	}, nil
 }
@@ -193,6 +200,20 @@ func parseMaxArtifactSize(lookup lookupFunc) (int64, error) {
 		return 0, errMaxArtifactSize
 	}
 	return size, nil
+}
+
+// parseStallTimeout defaults only when the variable is unset; an empty value is
+// an error. server.New rejects a duration of zero or less.
+func parseStallTimeout(lookup lookupFunc) (time.Duration, error) {
+	value, ok := lookup("NX_CACHE_STALL_TIMEOUT")
+	if !ok {
+		return defaultStallTimeout, nil
+	}
+	timeout, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, server.ErrStallTimeout
+	}
+	return timeout, nil
 }
 
 // parseFailOpen defaults only when the variable is unset; an empty value is an error.

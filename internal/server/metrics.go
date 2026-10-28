@@ -10,6 +10,7 @@ import (
 // metrics holds the server's Prometheus collectors.
 type metrics struct {
 	requests *prometheus.CounterVec
+	stalls   *prometheus.CounterVec
 }
 
 // newMetrics creates the collectors and registers them with reg. A nil reg
@@ -21,6 +22,11 @@ func newMetrics(reg prometheus.Registerer) *metrics {
 			Name: "nx_cache_requests_total",
 			Help: "Cache requests by HTTP method and outcome.",
 		}, []string{"method", "outcome"}),
+		stalls: factory.NewCounterVec(prometheus.CounterOpts{
+			Name: "nx_cache_stalled_transfers_total",
+			Help: "Transfers stopped because the server received no bytes for the stall timeout, " +
+				"by HTTP method and the side it was waiting on.",
+		}, []string{"method", "side"}),
 	}
 }
 

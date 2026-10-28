@@ -55,7 +55,7 @@ func newBackendHandler(t *testing.T, b *s3test.Backend, opts backendServer) http
 		AccessTokens: []string{accessToken}, ReadOnlyTokens: []string{readOnlyToken},
 		Bucket: opts.bucket, Region: b.Region, Endpoint: b.Endpoint,
 		AccessKeyID: b.AccessKeyID, SecretAccessKey: opts.secret,
-		FailOpen: true, Logger: testLogger(opts.logs),
+		FailOpen: true, Logger: testLogger(opts.logs), StallTimeout: time.Minute,
 	})
 	if err != nil {
 		t.Fatal(err)

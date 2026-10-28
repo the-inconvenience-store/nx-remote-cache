@@ -45,6 +45,12 @@ mise pins all tools and runs tasks (`mise run <task>`):
   Plain-text bodies. S3 transport keeps up to 256 idle connections (SDK
   default 10 per host) so Nx's burst of parallel GETs reuses connections;
   SDK timeouts and retries otherwise unchanged.
+- Stall timeout (`internal/server/stall.go`): a `transfer` wraps the body the
+  server receives (S3 GET body, client PUT body); each chunk restarts a
+  `NX_CACHE_STALL_TIMEOUT` timer. On expiry it cancels the S3 request context
+  and expires the client connection deadline via `http.ResponseController`,
+  then the handler attributes the stall to `storage` or `client` by which read
+  failed. No total-time limit.
 - Cache request checks (`internal/server`): each `//` in the path becomes `/`
   before routing (no 307); after auth the hash must match
   `^[0-9A-Za-z_-]{1,128}$` (else 400); an upload whose Content-Length exceeds
@@ -53,8 +59,9 @@ mise pins all tools and runs tasks (`mise run <task>`):
   `hash`, `bytes`, `access`; never token text.
 - Metrics (`internal/server/metrics.go`): `newMetrics` registers every
   collector with `Config.Metrics` (nil → unregistered); add new metrics there.
-  `nx_cache_requests_total{method,outcome}` counts cache requests; never label
-  by hash.
+  `nx_cache_requests_total{method,outcome}` counts cache requests;
+  `nx_cache_stalled_transfers_total{method,side}` counts stopped transfers;
+  never label by hash.
 - `internal` must not import `cmd`.
 
 ## Testing
@@ -77,7 +84,8 @@ comma-separated token lists; empty item, duplicate or overlap → startup error)
 only with an endpoint), `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (both or
 neither; neither → default credential chain), `NX_CACHE_FAIL_OPEN` (true),
 `TLS_CERT_PATH` + `TLS_KEY_PATH` (both or neither), `NX_CACHE_MAX_ARTIFACT_BYTES`
-(0 = no limit). See README for rules.
+(0 = no limit), `NX_CACHE_STALL_TIMEOUT` (60s; Go duration > 0). See README for
+rules.
 
 ## CI
 

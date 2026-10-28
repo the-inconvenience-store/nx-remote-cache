@@ -30,6 +30,7 @@ var (
 		"a token must not be listed twice in NX_CACHE_ACCESS_TOKEN or NX_CACHE_READ_ONLY_TOKEN")
 	ErrAWSCredentials  = errors.New("AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set together")
 	ErrBucketNotConfig = errors.New("S3 bucket name must not be empty")
+	ErrStallTimeout    = errors.New("NX_CACHE_STALL_TIMEOUT must be a Go duration greater than zero, such as 60s")
 )
 
 const readyTimeout = 2 * time.Second
@@ -58,7 +59,11 @@ type Config struct {
 	// FailOpen degrades storage failures into cache misses (GET 404) and
 	// non-fatal "not stored" responses (PUT 403) instead of 503.
 	FailOpen bool
-	Logger   *slog.Logger
+	// StallTimeout stops an artifact transfer when the server receives no
+	// bytes of it for this long. It must be positive; there is no limit on the
+	// total transfer time.
+	StallTimeout time.Duration
+	Logger       *slog.Logger
 	// Metrics receives the server's collectors. Nil leaves them unregistered.
 	// New panics if they are already registered with it.
 	Metrics prometheus.Registerer
@@ -161,6 +166,9 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Bucket == "" {
 		return ErrBucketNotConfig
+	}
+	if cfg.StallTimeout <= 0 {
+		return ErrStallTimeout
 	}
 	return nil
 }
