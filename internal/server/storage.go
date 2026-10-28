@@ -21,6 +21,23 @@ const (
 	dialTimeout           = 5 * time.Second
 	tlsHandshakeTimeout   = 5 * time.Second
 	responseHeaderTimeout = 30 * time.Second
+	// maxIdleConns keeps S3 connections open between the bursts of parallel
+	// GETs Nx sends at the start of a run; the SDK default keeps 10 per host.
+	// All requests go to one S3 host, so the total and per-host limits match.
+	maxIdleConns = 256
+)
+
+// AddressStyle selects how S3 requests name the bucket.
+type AddressStyle int
+
+const (
+	// AddressStyleAuto uses virtual-hosted style on AWS (no Endpoint) and path
+	// style for a custom Endpoint.
+	AddressStyleAuto AddressStyle = iota
+	// AddressStylePath puts the bucket in the URL path.
+	AddressStylePath
+	// AddressStyleVirtualHosted puts the bucket in the host name.
+	AddressStyleVirtualHosted
 )
 
 var (
@@ -36,6 +53,8 @@ func newS3Client(ctx context.Context, cfg *Config) (*s3.Client, error) {
 		WithTransportOptions(func(t *http.Transport) {
 			t.TLSHandshakeTimeout = tlsHandshakeTimeout
 			t.ResponseHeaderTimeout = responseHeaderTimeout
+			t.MaxIdleConns = maxIdleConns
+			t.MaxIdleConnsPerHost = maxIdleConns
 		})
 	loadOptions := []func(*config.LoadOptions) error{
 		config.WithRegion(cfg.Region),
@@ -50,7 +69,8 @@ func newS3Client(ctx context.Context, cfg *Config) (*s3.Client, error) {
 		return nil, fmt.Errorf("load AWS configuration: %w", err)
 	}
 	return s3.NewFromConfig(awsCfg, func(o *s3.Options) {
-		o.UsePathStyle = true
+		o.UsePathStyle = cfg.AddressStyle == AddressStylePath ||
+			cfg.AddressStyle == AddressStyleAuto && cfg.Endpoint != ""
 		if cfg.Endpoint != "" {
 			o.BaseEndpoint = new(cfg.Endpoint)
 		}

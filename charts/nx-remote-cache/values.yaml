@@ -56,9 +56,11 @@ config:
   awsRegion: us-east-1
   s3:
     bucketName: nx-cloud
-    # Optional S3 endpoint URL for S3-compatible storage (path-style requests).
-    # Leave empty for AWS S3.
+    # Optional S3 endpoint URL for S3-compatible storage. Leave empty for AWS S3.
     endpointUrl: ""
+    # Optional "true" (path-style) or "false" (virtual-hosted style). Empty
+    # keeps the default: virtual-hosted on AWS S3, path-style with endpointUrl.
+    forcePathStyle: ""
 
 # Secret strategy: either supply the values below to have the chart create a
 # Secret, or set existingSecret to the name of an externally managed Secret.
@@ -70,8 +72,9 @@ config:
 # Empty optional values are omitted from the chart-created Secret.
 secrets:
   existingSecret: ""
+  # Comma-separated list; list old and new tokens together to rotate them.
   nxCacheAccessToken: ""
-  # Optional; must differ from the trusted access token.
+  # Optional comma-separated list; no token may also be an access token.
   nxCacheReadOnlyToken: ""
   # Optional; set both or neither.
   awsAccessKeyId: ""

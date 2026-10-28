@@ -53,6 +53,10 @@ spec:
             - name: S3_ENDPOINT_URL
               value: {{ . | quote }}
             {{- end }}
+            {{- if ne (toString .Values.config.s3.forcePathStyle) "" }}
+            - name: S3_FORCE_PATH_STYLE
+              value: {{ .Values.config.s3.forcePathStyle | toString | quote }}
+            {{- end }}
             - name: NX_CACHE_FAIL_OPEN
               value: {{ .Values.config.failOpen | quote }}
             - name: NX_CACHE_ACCESS_TOKEN

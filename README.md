@@ -28,12 +28,13 @@ Invalid configuration prints an error to stderr and exits with status 1. See
 
 | Variable | Required | Default | Rules |
 | --- | --- | --- | --- |
-| `NX_CACHE_ACCESS_TOKEN` | yes | — | Trusted read/write token. Nonempty, no whitespace. |
-| `NX_CACHE_READ_ONLY_TOKEN` | no | unset | Download-only token. If set (even empty) it must be nonempty, contain no whitespace, and differ from `NX_CACHE_ACCESS_TOKEN`. |
+| `NX_CACHE_ACCESS_TOKEN` | yes | — | Trusted read/write tokens: a comma-separated list. Each token is nonempty, without whitespace. |
+| `NX_CACHE_READ_ONLY_TOKEN` | no | unset | Download-only tokens: a comma-separated list. If set (even empty), each token must be nonempty, contain no whitespace, and not appear in `NX_CACHE_ACCESS_TOKEN`. |
 | `PORT` | no | `3000` | Listen port. |
 | `AWS_REGION` | no | `us-east-1` | |
 | `S3_BUCKET_NAME` | no | `nx-cloud` | |
-| `S3_ENDPOINT_URL` | no | unset (AWS S3) | Custom S3-compatible endpoint. Requests always use path-style addressing. |
+| `S3_ENDPOINT_URL` | no | unset (AWS S3) | Custom S3-compatible endpoint. |
+| `S3_FORCE_PATH_STYLE` | no | unset | `true` (path-style) or `false` (virtual-hosted style); anything else, including empty, is an error. Unset → virtual-hosted style on AWS S3, path-style when `S3_ENDPOINT_URL` is set. On AWS, a bucket name containing a dot can fail TLS in virtual-hosted style; set `true` for such buckets. |
 | `AWS_ACCESS_KEY_ID` | no | unset | Set both AWS keys or neither. Neither → AWS SDK default credential chain. |
 | `AWS_SECRET_ACCESS_KEY` | no | unset | See above. |
 | `NX_CACHE_FAIL_OPEN` | no | `true` | `true` or `false`; anything else is an error. See [Cache outages](#cache-outages). |
@@ -121,6 +122,18 @@ at a trusted proxy.
 
 For Helm, set `secrets.nxCacheReadOnlyToken`, or add the optional
 `nx-cache-read-only-token` key to the existing Secret.
+
+### Rotating tokens
+
+Both variables accept a comma-separated list, and every listed token works. To
+rotate without downtime, add the new token (`old-token,new-token`), move the CI
+jobs to it, then remove the old token. Spaces around each comma are removed.
+The server does not start if an item is empty (`a,,b` or a trailing comma), a
+token is listed twice, or a token is in both lists. A comma always separates
+tokens, so a token cannot contain a comma.
+
+With `helm --set`, escape each comma (`--set 'secrets.nxCacheAccessToken=old\,new'`)
+or set the value in a values file.
 
 ### Nx version and TLS
 
@@ -219,6 +232,10 @@ never replays a body. A client disconnect or body-read error aborts the storage
 request, nothing is stored, and the server returns 500. A retry requires a fresh
 client request. Memory use scales with concurrent stream buffers, not artifact
 size.
+
+The S3 client keeps up to 256 idle connections, so the burst of parallel
+downloads at the start of an Nx run reuses storage connections instead of
+opening and closing one per request.
 
 ## Upload compatibility
 

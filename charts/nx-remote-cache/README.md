@@ -19,7 +19,9 @@ helm install nx-cache oci://ghcr.io/the-inconvenience-store/charts/nx-remote-cac
 ```
 
 Set `config.s3.endpointUrl` for S3-compatible storage other than AWS S3; leave
-it empty for AWS.
+it empty for AWS. Requests use virtual-hosted style on AWS and path-style with
+an endpoint; set `config.s3.forcePathStyle` to `"true"` or `"false"` to
+override (for example `"true"` for an AWS bucket whose name contains a dot).
 
 ## Using an externally managed Secret
 
@@ -54,6 +56,14 @@ contain no whitespace, and differ from `nx-cache-access-token`. The access token
 keeps read/write permission; the read-only token permits GET and gets 403 on
 PUT. Give PR jobs only the read-only token (or none if they must not read cached
 outputs).
+
+## Rotating tokens
+
+Both token keys accept a comma-separated list, and every listed token works:
+add the new token (`old-token,new-token`), move CI jobs to it, then remove the
+old one. The server does not start if an item is empty, a token is listed
+twice, or a token is in both lists. With `helm --set`, escape the comma
+(`--set 'secrets.nxCacheAccessToken=old-token\,new-token'`) or use a values file.
 
 ## IRSA / Workload Identity (no static AWS keys)
 
@@ -128,6 +138,7 @@ helm install nx-cache oci://ghcr.io/the-inconvenience-store/charts/nx-remote-cac
 | `config.awsRegion` | `us-east-1` | `AWS_REGION` |
 | `config.s3.bucketName` | `nx-cloud` | `S3_BUCKET_NAME` |
 | `config.s3.endpointUrl` | `""` | `S3_ENDPOINT_URL`; omitted when empty (AWS S3) |
+| `config.s3.forcePathStyle` | `""` | `S3_FORCE_PATH_STYLE` (`"true"` or `"false"`); omitted when empty |
 | `secrets.existingSecret` | `""` | If set, skip Secret creation and use this one |
 | `secrets.nxCacheAccessToken` | `""` | Required if `existingSecret` is empty |
 | `secrets.nxCacheReadOnlyToken` | `""` | Optional download-only token |
