@@ -55,6 +55,8 @@ func TestRequestLogReportsCacheOutcomes(t *testing.T) {
 	expectRequestLog(t, &logs, map[string]string{
 		"method": "GET", "status": "404", "hash": "missing", "bytes": "0", "access": "rw", "outcome": "miss",
 	})
+	do(t, h, call{method: http.MethodPut, path: "/v1/cache/abc", token: accessToken})
+	expectRequestLog(t, &logs, map[string]string{"method": "PUT", "status": "411", "outcome": "bad-request"})
 	do(t, h, call{method: http.MethodGet, path: "/health"})
 	expectRequestLog(t, &logs, map[string]string{
 		"path": "/health", "status": "200", "hash": "", "bytes": "", "access": "", "outcome": "",
@@ -68,7 +70,7 @@ func TestRequestLogShowsAccessWithoutTokens(t *testing.T) {
 
 	put(t, h, "abc", readOnlyToken, "data")
 	expectRequestLog(t, &logs, map[string]string{
-		"method": "PUT", "status": "403", "hash": "abc", "access": "ro", "outcome": "read-only",
+		"method": "PUT", "status": "403", "hash": "abc", "bytes": "4", "access": "ro", "outcome": "read-only",
 	})
 	get(t, h, "abc", readOnlyToken)
 	expectRequestLog(t, &logs, map[string]string{"method": "GET", "access": "ro", "outcome": "miss"})
@@ -76,6 +78,10 @@ func TestRequestLogShowsAccessWithoutTokens(t *testing.T) {
 	get(t, h, "abc", intruder)
 	expectRequestLog(t, &logs, map[string]string{
 		"method": "GET", "status": "401", "hash": "abc", "access": "", "outcome": "unauthorised",
+	})
+	put(t, h, "abc", intruder, "data")
+	expectRequestLog(t, &logs, map[string]string{
+		"method": "PUT", "status": "401", "hash": "abc", "bytes": "4", "access": "", "outcome": "unauthorised",
 	})
 	put(t, h, "abc", accessToken, "data")
 	expectRequestLog(t, &logs, map[string]string{"method": "PUT", "access": "rw", "outcome": "stored"})

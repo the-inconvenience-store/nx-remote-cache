@@ -78,12 +78,13 @@ func New(ctx context.Context, cfg *Config) (http.Handler, error) {
 	return h.logRequests(mux), nil
 }
 
-// cacheRoute authenticates a cache request and records its hash and access for
-// the request log before serve runs.
+// cacheRoute authenticates a cache request and records its hash, declared
+// length and access for the request log before serve runs.
 func (h *handler) cacheRoute(serve func(http.ResponseWriter, *http.Request, *cacheRequest)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		req := cacheRequestFrom(r.Context())
 		req.hash = r.PathValue("hash")
+		req.bytes = max(r.ContentLength, 0)
 		req.access = h.access(r)
 		if req.access == accessNone {
 			writeText(w, http.StatusUnauthorized, "Missing or invalid authentication token")

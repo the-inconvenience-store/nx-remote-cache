@@ -23,7 +23,6 @@ func (h *handler) upload(w http.ResponseWriter, r *http.Request, req *cacheReque
 		req.outcome = outcomeBadRequest
 		return
 	}
-	req.bytes = r.ContentLength
 
 	exists, err := h.objectExists(r, req.hash)
 	if err != nil {
