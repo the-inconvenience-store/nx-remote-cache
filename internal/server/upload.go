@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func (h *handler) upload(w http.ResponseWriter, r *http.Request, req *cacheRequest) {
@@ -65,7 +67,7 @@ func (h *handler) putObject(w http.ResponseWriter, r *http.Request, hash, writer
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	rc := http.NewResponseController(w)
-	body := startTransfer(r.Body, h.cfg.StallTimeout, func() {
+	body := startTransfer(receivedBody{r: r.Body, received: h.metrics.received}, h.cfg.StallTimeout, func() {
 		cancel()
 		expireClientDeadline(rc.SetReadDeadline)
 	})
@@ -79,6 +81,8 @@ func (h *handler) putObject(w http.ResponseWriter, r *http.Request, hash, writer
 	conditional := !h.conditionalUnsupported.Load()
 	if conditional {
 		input.IfNoneMatch = new("*")
+	} else {
+		h.metrics.unconditionalUploads.Inc()
 	}
 	// The request body streams straight to S3 and cannot be replayed, so the
 	// payload is unsigned and the SDK must not retry.
@@ -101,15 +105,29 @@ func (h *handler) putObject(w http.ResponseWriter, r *http.Request, hash, writer
 		writeText(w, http.StatusConflict, "Cannot override an existing record")
 		return outcomeConflict
 	case conditional && unsupportedCondition(err):
-		h.conditionalUnsupported.Store(true)
-		h.log.WarnContext(r.Context(),
-			"Storage does not support conditional PUT; later uploads are not atomic",
-			"hash", hash, "error", err)
+		// Uploads in flight together may all be rejected; warn only at the switch.
+		if h.conditionalUnsupported.CompareAndSwap(false, true) {
+			h.log.WarnContext(r.Context(), "Storage does not support conditional writes; "+
+				"later uploads are sent without If-None-Match and can overwrite each other",
+				"hash", hash, "error", err)
+		}
 		writeNotStored(w)
 		return outcomeDegraded
 	default:
 		return h.storageFailure(w, r, err)
 	}
+}
+
+// receivedBody counts the artifact bytes read from the upload request body.
+type receivedBody struct {
+	r        io.Reader
+	received prometheus.Counter
+}
+
+func (b receivedBody) Read(p []byte) (int, error) {
+	n, err := b.r.Read(p)
+	b.received.Add(float64(n))
+	return n, err //nolint:wrapcheck // io.Reader contract requires the raw error, including io.EOF
 }
 
 // uploadStalled answers an upload that the stall timeout stopped. A failed read

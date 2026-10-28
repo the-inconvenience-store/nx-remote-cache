@@ -24,7 +24,10 @@ restarts the server with `METRICS_PORT=0`.
 ## Proof
 
 Require exactly `GET hit 2`, `GET miss 1`, `PUT stored 1` and `PUT conflict 1`
-in `nx_cache_requests_total`, 404 for `/metrics` on the cache port, and a
+in `nx_cache_requests_total`; received bytes equal to one payload and sent bytes
+equal to two (the conflicting upload is refused before its body is read);
+`nx_cache_s3_request_duration_seconds` series for `HeadObject`, `PutObject`,
+`GetObject` and `HeadBucket`; 404 for `/metrics` on the cache port; and a
 refused connection to the former metrics port after the `METRICS_PORT=0`
 restart.
 

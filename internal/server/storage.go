@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
+	"github.com/aws/smithy-go/middleware"
 )
 
 const (
@@ -47,7 +48,9 @@ var (
 	unsupportedFeature = regexp.MustCompile(`(?i)not (supported|implemented)|unsupported`)
 )
 
-func newS3Client(ctx context.Context, cfg *Config) (*s3.Client, error) {
+// newS3Client builds the S3 client; apiOption is added to every operation's
+// middleware stack.
+func newS3Client(ctx context.Context, cfg *Config, apiOption func(*middleware.Stack) error) (*s3.Client, error) {
 	httpClient := awshttp.NewBuildableClient().
 		WithDialerOptions(func(d *net.Dialer) { d.Timeout = dialTimeout }).
 		WithTransportOptions(func(t *http.Transport) {
@@ -78,6 +81,7 @@ func newS3Client(ctx context.Context, cfg *Config) (*s3.Client, error) {
 		// buffering of the one-shot request body; S3-compatible stores vary.
 		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
 		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
+		o.APIOptions = append(o.APIOptions, apiOption)
 	}), nil
 }
 

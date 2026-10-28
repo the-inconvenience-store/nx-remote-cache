@@ -40,7 +40,9 @@ mise pins all tools and runs tasks (`mise run <task>`):
   stream with Content-Length, HeadObject then PutObject with `If-None-Match: *`
   and metadata identifying the uploader by the first 12 hex characters of the
   token's SHA-256 plus the RFC 3339 UTC upload time. (The condition is dropped
-  per process once storage reports it unsupported.) Storage failures:
+  per process once storage reports it unsupported: one warning at the switch,
+  then `nx_cache_unconditional_uploads_total` counts each unconditional PUT.)
+  Storage failures:
   fail-open (default) → GET 404 / PUT 403; `NX_CACHE_FAIL_OPEN=false` → 503.
   Plain-text bodies. S3 transport keeps up to 256 idle connections (SDK
   default 10 per host) so Nx's burst of parallel GETs reuses connections;
@@ -58,11 +60,14 @@ mise pins all tools and runs tasks (`mise run <task>`):
   `NX_CACHE_MAX_ARTIFACT_BYTES` gets 403 before its body is read. Each cache
   request records one `outcome` (`requestlog.go`) on its request log line with
   `hash`, `bytes`, `access`; never token text.
-- Metrics (`internal/server/metrics.go`): `newMetrics` registers every
-  collector with `Config.Metrics` (nil → unregistered); add new metrics there.
+- Metrics (`internal/server/metrics.go`): declare every collector once in
+  `newMetrics`; `New` registers them all with `Config.Metrics` (nil →
+  unregistered) only after it succeeds.
   `nx_cache_requests_total{method,outcome}` counts cache requests;
   `nx_cache_stalled_transfers_total{method,side}` counts stopped transfers;
-  never label by hash.
+  never label by hash. Byte counters count bytes actually read/written
+  (`receivedBody`, download copy), not declared lengths. S3 call durations come
+  from one SDK Initialize middleware (`timeS3Calls`) labelled by operation name.
 - `internal` must not import `cmd`.
 
 ## Testing
