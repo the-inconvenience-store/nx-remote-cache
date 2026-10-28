@@ -72,7 +72,7 @@ docker run -p 3000:3000 \
   -e AWS_ACCESS_KEY_ID=your-access-key \
   -e AWS_SECRET_ACCESS_KEY=your-secret-key \
   -e S3_BUCKET_NAME=your-bucket \
-  ghcr.io/the-inconvenience-store/nx-remote-cache:0.1.0
+  ghcr.io/the-inconvenience-store/nx-remote-cache:0.2.0
 ```
 
 Add `-e S3_ENDPOINT_URL=...` for S3-compatible storage. The image is distroless
@@ -82,7 +82,7 @@ Add `-e S3_ENDPOINT_URL=...` for S3-compatible storage. The image is distroless
 
 ```bash
 helm install nx-cache oci://ghcr.io/the-inconvenience-store/charts/nx-remote-cache \
-  --version 0.1.0 \
+  --version 0.2.0 \
   --set secrets.nxCacheAccessToken=your-secure-token \
   --set config.s3.bucketName=your-bucket
 ```

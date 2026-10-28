@@ -10,7 +10,7 @@ Charts are published as OCI artifacts to GHCR.
 
 ```bash
 helm install nx-cache oci://ghcr.io/the-inconvenience-store/charts/nx-remote-cache \
-  --version 0.1.0 \
+  --version 0.2.0 \
   --namespace nx-cache --create-namespace \
   --set secrets.nxCacheAccessToken=<token> \
   --set secrets.awsAccessKeyId=<key> \
@@ -41,7 +41,7 @@ kubectl create secret generic nx-cache-creds \
   --from-literal=aws-secret-access-key=<secret>
 
 helm install nx-cache oci://ghcr.io/the-inconvenience-store/charts/nx-remote-cache \
-  --version 0.1.0 \
+  --version 0.2.0 \
   --set secrets.existingSecret=nx-cache-creds
 ```
 
