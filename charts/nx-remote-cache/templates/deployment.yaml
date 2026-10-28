@@ -55,10 +55,15 @@ spec:
             {{- end }}
             - name: NX_CACHE_FAIL_OPEN
               value: {{ .Values.config.failOpen | quote }}
-            {{- with .Values.config.maxArtifactBytes }}
-            {{- /* A values-file number is a float64; int64 avoids exponent form. */}}
+            {{- $maxArtifactBytes := .Values.config.maxArtifactBytes }}
+            {{- if not (kindIs "invalid" $maxArtifactBytes) }}
+            {{- /* A values-file number is a float64: render a whole one without exponent
+                 form and pass anything else on unchanged, so the server rejects it. */}}
+            {{- if and (kindIs "float64" $maxArtifactBytes) (eq $maxArtifactBytes (float64 (int64 $maxArtifactBytes))) }}
+            {{- $maxArtifactBytes = int64 $maxArtifactBytes }}
+            {{- end }}
             - name: NX_CACHE_MAX_ARTIFACT_BYTES
-              value: {{ if kindIs "float64" . }}{{ int64 . | quote }}{{ else }}{{ quote . }}{{ end }}
+              value: {{ $maxArtifactBytes | toString | quote }}
             {{- end }}
             - name: NX_CACHE_ACCESS_TOKEN
               valueFrom:
