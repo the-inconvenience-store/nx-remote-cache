@@ -1,6 +1,6 @@
 //go:build e2e
 
-// Package e2e_test drives real Nx 23.3 builds against the nx-remote-cache
+// Package e2e_test drives real Nx builds against the nx-remote-cache
 // binary on Garage and versitygw containers. It needs Docker and Node.js (npx).
 package e2e_test
 
@@ -25,11 +25,10 @@ import (
 const (
 	trustedToken  = "e2e-trusted-token"
 	readOnlyToken = "e2e-read-only-token"
-	nxVersion     = "23.3"
 	workspaceName = "e2e-workspace"
 	project       = "@e2e-workspace/shop"
-	// Nx 23 summarises cache use per run; after `nx reset` a hit can only come
-	// from the remote cache.
+	// Nx 23 and 24 summarize cache use per run; after `nx reset` a hit can only
+	// come from the remote cache.
 	missMarker   = "Cache:             0/1 hit"
 	remoteMarker = "Cache:             1/1 hit"
 	readyTimeout = 30 * time.Second
@@ -57,35 +56,45 @@ func (b *syncBuffer) String() string {
 func TestNxUsesRemoteCacheAndSurvivesStorageOutage(t *testing.T) {
 	t.Parallel()
 	binary := buildServer(t)
-	for name, start := range s3test.Starters() {
-		t.Run(name, func(t *testing.T) {
+	for _, version := range []string{"23.3.0", "24.0.2"} {
+		t.Run(version, func(t *testing.T) {
 			t.Parallel()
-			backend := start(t)
-			serverURL, serverLog := startServer(t, binary, backend)
-			workspace := createWorkspace(t)
-
-			out := nxBuild(t, workspace, serverURL, trustedToken)
-			if !strings.Contains(out, missMarker) {
-				t.Fatalf("first build should run and upload:\n%s", out)
-			}
-			if !strings.Contains(serverLog.String(), `method=PUT`) {
-				t.Fatalf("no upload reached the server:\n%s", serverLog.String())
-			}
-
-			out = nxBuild(t, workspace, serverURL, readOnlyToken)
-			if !strings.Contains(out, remoteMarker) {
-				t.Fatalf("read-only build should restore from the remote cache:\n%s", out)
-			}
-
-			backend.Stop(t)
-			out = nxBuild(t, workspace, serverURL, trustedToken)
-			if !strings.Contains(out, missMarker) {
-				t.Fatalf("build during storage outage should rebuild as a cache miss:\n%s", out)
-			}
-			if !strings.Contains(serverLog.String(), `msg="Storage unavailable"`) {
-				t.Fatalf("outage not logged:\n%s", serverLog.String())
+			for name, start := range s3test.Starters() {
+				t.Run(name, func(t *testing.T) {
+					t.Parallel()
+					testNxBackend(t, binary, version, start)
+				})
 			}
 		})
+	}
+}
+
+func testNxBackend(t *testing.T, binary, version string, start s3test.Starter) {
+	t.Helper()
+	backend := start(t)
+	serverURL, serverLog := startServer(t, binary, backend)
+	workspace := createWorkspace(t, version)
+
+	out := nxBuild(t, workspace, serverURL, trustedToken)
+	if !strings.Contains(out, missMarker) {
+		t.Fatalf("first build should run and upload:\n%s", out)
+	}
+	if !strings.Contains(serverLog.String(), `method=PUT`) {
+		t.Fatalf("no upload reached the server:\n%s", serverLog.String())
+	}
+
+	out = nxBuild(t, workspace, serverURL, readOnlyToken)
+	if !strings.Contains(out, remoteMarker) {
+		t.Fatalf("read-only build should restore from the remote cache:\n%s", out)
+	}
+
+	backend.Stop(t)
+	out = nxBuild(t, workspace, serverURL, trustedToken)
+	if !strings.Contains(out, missMarker) {
+		t.Fatalf("build during storage outage should rebuild as a cache miss:\n%s", out)
+	}
+	if !strings.Contains(serverLog.String(), `msg="Storage unavailable"`) {
+		t.Fatalf("outage not logged:\n%s", serverLog.String())
 	}
 }
 
@@ -161,10 +170,11 @@ func waitHealthy(t *testing.T, url string, logs *syncBuffer) {
 	t.Fatalf("server did not become healthy:\n%s", logs.String())
 }
 
-func createWorkspace(t *testing.T) string {
+func createWorkspace(t *testing.T, version string) string {
 	t.Helper()
 	dir := t.TempDir()
-	cmd := exec.CommandContext(t.Context(), "npx", "-y", "create-nx-workspace@"+nxVersion, workspaceName,
+	//nolint:gosec // version is one of the suite's fixed Nx versions
+	cmd := exec.CommandContext(t.Context(), "npx", "-y", "create-nx-workspace@"+version, workspaceName,
 		"--preset=react-monorepo", "--appName=shop", "--bundler=vite", "--style=css",
 		"--e2eTestRunner=none", "--unitTestRunner=none", "--linter=none", "--formatter=none",
 		"--aiAgents=none", "--nxCloud=skip", "--skipGit", "--interactive=false")

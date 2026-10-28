@@ -54,8 +54,11 @@ jobs:
         run: mise run test-integration
 
   e2e:
-    name: Nx E2E
+    name: Nx E2E (${{ matrix.nx-version }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        nx-version: ["23.3.0", "24.0.2"]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -72,8 +75,9 @@ jobs:
           key: go-${{ runner.os }}-${{ github.job }}-${{ hashFiles('go.sum') }}
           restore-keys: go-${{ runner.os }}-${{ github.job }}-
       - name: Nx builds against the cache server
+        env:
+          NX_VERSION: ${{ matrix.nx-version }}
         run: mise run e2e
-
   commits:
     name: Conventional Commits
     if: github.event_name == 'pull_request'

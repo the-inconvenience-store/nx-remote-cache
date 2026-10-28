@@ -41,7 +41,7 @@ description = "Feature suite on Garage and versitygw, atomic-write races on vers
 run = 'DOCKER_HOST="${DOCKER_HOST:-$(docker context inspect --format "{% raw %}{{.Endpoints.docker.Host}}{% endraw %}")}" go test -race -tags integration -count=1 ./internal/...'
 
 [tasks.e2e]
-description = "Real Nx 23.3 builds on Garage and versitygw (needs Docker and Node)"
+description = "Real Nx 23.3 and 24.0 builds on Garage and versitygw (needs Docker and Node)"
 run = 'DOCKER_HOST="${DOCKER_HOST:-$(docker context inspect --format "{% raw %}{{.Endpoints.docker.Host}}{% endraw %}")}" go test -tags e2e -count=1 -timeout 20m ./e2e/...'
 
 [tasks.test-s3]
