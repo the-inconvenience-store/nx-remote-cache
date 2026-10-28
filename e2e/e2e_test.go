@@ -116,6 +116,8 @@ func startServer(t *testing.T, binary string, backend *s3test.Backend) (string, 
 	cmd := exec.CommandContext(context.WithoutCancel(t.Context()), binary)
 	cmd.Env = append(os.Environ(),
 		"PORT="+strconv.Itoa(port),
+		// Servers run in parallel; the default metrics port would collide.
+		"METRICS_PORT=0",
 		"AWS_REGION="+backend.Region,
 		"AWS_ACCESS_KEY_ID="+backend.AccessKeyID,
 		"AWS_SECRET_ACCESS_KEY="+backend.SecretAccessKey,
