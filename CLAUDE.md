@@ -73,3 +73,21 @@ version. Dependabot updates Go modules, the Dockerfile and actions weekly.
 - Logging with `log/slog`.
 - Conventional Commits, enforced by cocogitto.
 - `.golangci.yml` is the source of truth for lint and formatting rules.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues for `the-inconvenience-store/nx-remote-cache`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the five canonical triage labels. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `GLOSSARY.md` and `docs/adr/`. See `docs/agents/domain.md`.
+
+### Verification
+
+Follow `docs/agents/verification/README.md` to launch and doctor each real user-facing surface, drive its public path, capture evidence, and clean up.
