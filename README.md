@@ -366,6 +366,9 @@ port has no authentication and no TLS; keep it on the internal network.
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
 | `nx_cache_requests_total` | counter | `method`, `outcome` | Cache requests by HTTP method and [outcome](#request-log). |
+| `nx_cache_received_bytes_total` | counter | — | Artifact bytes read from upload bodies; an aborted upload counts the bytes read before it stopped. |
+| `nx_cache_sent_bytes_total` | counter | — | Artifact bytes written to download responses; an interrupted download counts the bytes sent. |
+| `nx_cache_s3_request_duration_seconds` | histogram | `operation` | S3 API call duration (`HeadObject`, `PutObject`, `GetObject`, `HeadBucket`), including SDK retries. `PutObject` includes streaming the upload; `GetObject` ends when the response headers arrive, before the artifact streams. |
 
 The standard Go runtime (`go_*`) and process (`process_*`) metrics are also
 served.

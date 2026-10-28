@@ -51,10 +51,13 @@ mise pins all tools and runs tasks (`mise run <task>`):
   `NX_CACHE_MAX_ARTIFACT_BYTES` gets 403 before its body is read. Each cache
   request records one `outcome` (`requestlog.go`) on its request log line with
   `hash`, `bytes`, `access`; never token text.
-- Metrics (`internal/server/metrics.go`): `newMetrics` registers every
-  collector with `Config.Metrics` (nil → unregistered); add new metrics there.
+- Metrics (`internal/server/metrics.go`): declare every collector once in
+  `newMetrics`; `New` registers them all with `Config.Metrics` (nil →
+  unregistered) only after it succeeds.
   `nx_cache_requests_total{method,outcome}` counts cache requests; never label
-  by hash.
+  by hash. Byte counters count bytes actually read/written (`trackedBody`,
+  download copy), not declared lengths. S3 call durations come from one SDK
+  Initialize middleware (`timeS3Calls`) labelled by operation name.
 - `internal` must not import `cmd`.
 
 ## Testing

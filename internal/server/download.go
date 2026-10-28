@@ -39,6 +39,7 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request, req *cacheReq
 	w.WriteHeader(http.StatusOK)
 	n, err := io.Copy(w, out.Body)
 	req.bytes = n
+	h.metrics.sent.Add(float64(n))
 	if err != nil {
 		req.outcome = outcomeError
 		h.log.ErrorContext(r.Context(), "Download interrupted", "hash", req.hash, "error", err)
