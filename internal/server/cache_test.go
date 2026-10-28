@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -71,11 +72,20 @@ func TestDoubleSlashPathsRouteWithoutRedirect(t *testing.T) {
 	s3 := newFakeS3(t)
 	h := newHandler(t, s3.URL, options{})
 
-	status, body := do(t, h, call{
-		method: http.MethodPut, path: "//v1/cache/abc", token: accessToken,
-		body: strings.NewReader("artifact"), length: 8,
+	artifact := strings.NewReader("artifact")
+	var bodyBytesRead atomic.Int64
+	body := readerFunc(func(p []byte) (int, error) {
+		n, err := artifact.Read(p)
+		bodyBytesRead.Add(int64(n))
+		return n, err
 	})
-	expect(t, status, body, http.StatusOK, "Successfully uploaded")
+	status, resp := do(t, h, call{
+		method: http.MethodPut, path: "//v1/cache/abc", token: accessToken, body: body, length: 8,
+	})
+	expect(t, status, resp, http.StatusOK, "Successfully uploaded")
+	if got := bodyBytesRead.Load(); got != 8 {
+		t.Fatalf("server read %d body bytes, want the 8-byte body once", got)
+	}
 	if stored, _ := s3.object("abc"); string(stored) != "artifact" {
 		t.Fatalf("stored %q, want artifact", stored)
 	}
