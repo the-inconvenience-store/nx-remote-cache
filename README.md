@@ -127,6 +127,11 @@ startup; omit the optional read-only setting rather than setting it to an empty
 string. Use HTTPS between clients and the server, whether TLS terminates here or
 at a trusted proxy.
 
+Each stored artifact includes S3 metadata `nx-writer` (the first 12 hexadecimal
+characters of the SHA-256 hash of the uploading bearer token) and
+`nx-uploaded-at` (the upload time in RFC 3339 UTC). The PUT request log records
+the same writer identifier; the token itself is never stored or logged.
+
 For Helm, set `secrets.nxCacheReadOnlyToken`, or add the optional
 `nx-cache-read-only-token` key to the existing Secret.
 

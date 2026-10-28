@@ -32,8 +32,10 @@ type cacheRequest struct {
 	access access
 	// bytes is the artifact size: the declared Content-Length of an upload, or
 	// the bytes of a download sent to the client.
-	bytes   int64
-	outcome outcome
+	bytes      int64
+	outcome    outcome
+	writer     string
+	uploadedAt string
 }
 
 type cacheRequestKey struct{}
@@ -70,7 +72,7 @@ func (h *handler) logRequests(next http.Handler) http.Handler {
 }
 
 // requestLogAttrs is the most attributes a request log line has.
-const requestLogAttrs = 8
+const requestLogAttrs = 9
 
 // logRequest writes the request log line. Cache requests add their fields;
 // tokens are never logged.
@@ -85,6 +87,9 @@ func (h *handler) logRequest(r *http.Request, rec *statusRecorder, req *cacheReq
 		attrs = append(attrs, slog.String("hash", req.hash), slog.Int64("bytes", req.bytes))
 		if req.access != accessNone {
 			attrs = append(attrs, slog.String("access", req.access.String()))
+		}
+		if req.writer != "" {
+			attrs = append(attrs, slog.String("writer", req.writer))
 		}
 		attrs = append(attrs, slog.String("outcome", string(req.outcome)))
 	}
