@@ -77,7 +77,7 @@ func TestMetricsRegistryUntouchedWhenNewFails(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	cfg := server.Config{
 		AccessTokens: []string{accessToken}, Bucket: testBucket, Region: "us-east-1",
-		AccessKeyID: "test", SecretAccessKey: "test", Metrics: registry,
+		AccessKeyID: "test", SecretAccessKey: "test", Metrics: registry, StallTimeout: time.Minute,
 	}
 	t.Setenv("AWS_PROFILE", "nx-cache-missing-profile")
 	if _, err := server.New(context.Background(), &cfg); err == nil {

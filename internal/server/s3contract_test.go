@@ -31,7 +31,7 @@ func TestS3ContractConcurrentUploadsCreateOneImmutableArtifact(t *testing.T) {
 		AccessTokens: []string{accessToken}, Bucket: bucket, Region: region,
 		Endpoint:    os.Getenv("S3_ENDPOINT_URL"),
 		AccessKeyID: os.Getenv("AWS_ACCESS_KEY_ID"), SecretAccessKey: os.Getenv("AWS_SECRET_ACCESS_KEY"),
-		FailOpen: false,
+		FailOpen: false, StallTimeout: time.Minute,
 	})
 	if err != nil {
 		t.Fatal(err)

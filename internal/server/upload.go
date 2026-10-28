@@ -1,13 +1,12 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
@@ -65,7 +64,13 @@ func (h *handler) objectExists(r *http.Request, hash string) (bool, error) {
 }
 
 func (h *handler) putObject(w http.ResponseWriter, r *http.Request, hash, writer, uploadedAt string) outcome {
-	body := &trackedBody{r: r.Body, received: h.metrics.received}
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	rc := http.NewResponseController(w)
+	body := startTransfer(receivedBody{r: r.Body, received: h.metrics.received}, h.cfg.StallTimeout, func() {
+		cancel()
+		expireClientDeadline(rc.SetReadDeadline)
+	})
 	input := &s3.PutObjectInput{
 		Bucket:        &h.cfg.Bucket,
 		Key:           &hash,
@@ -81,14 +86,17 @@ func (h *handler) putObject(w http.ResponseWriter, r *http.Request, hash, writer
 	}
 	// The request body streams straight to S3 and cannot be replayed, so the
 	// payload is unsigned and the SDK must not retry.
-	_, err := h.s3.PutObject(r.Context(), input,
+	_, err := h.s3.PutObject(ctx, input,
 		s3.WithAPIOptions(v4.SwapComputePayloadSHA256ForUnsignedPayloadMiddleware),
 		func(o *s3.Options) { o.RetryMaxAttempts = 1 })
+	stalled := body.finish()
 
 	switch {
 	case err == nil:
 		writeText(w, http.StatusOK, "Successfully uploaded")
 		return outcomeStored
+	case stalled:
+		return h.uploadStalled(w, r, hash, body)
 	case body.failed():
 		h.log.WarnContext(r.Context(), "Upload aborted by client", "hash", hash, "error", body.err())
 		writeText(w, http.StatusInternalServerError, "Internal server error")
@@ -110,33 +118,27 @@ func (h *handler) putObject(w http.ResponseWriter, r *http.Request, hash, writer
 	}
 }
 
-// trackedBody counts the bytes it reads and records a client-side read failure
-// so it is not mistaken for a storage failure. The SDK reads it from its
-// transport goroutine.
-type trackedBody struct {
+// receivedBody counts the artifact bytes read from the upload request body.
+type receivedBody struct {
 	r        io.Reader
 	received prometheus.Counter
-	mu       sync.Mutex
-	readErr  error
 }
 
-func (b *trackedBody) Read(p []byte) (int, error) {
+func (b receivedBody) Read(p []byte) (int, error) {
 	n, err := b.r.Read(p)
 	b.received.Add(float64(n))
-	if err != nil && !errors.Is(err, io.EOF) {
-		b.mu.Lock()
-		b.readErr = err
-		b.mu.Unlock()
-	}
 	return n, err //nolint:wrapcheck // io.Reader contract requires the raw error, including io.EOF
 }
 
-func (b *trackedBody) failed() bool {
-	return b.err() != nil
-}
-
-func (b *trackedBody) err() error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.readErr
+// uploadStalled answers an upload that the stall timeout stopped. A failed read
+// of the request body means the client stopped sending; otherwise storage
+// stopped taking the body or did not answer.
+func (h *handler) uploadStalled(w http.ResponseWriter, r *http.Request, hash string, body *transfer) outcome {
+	if body.failed() {
+		h.reportStall(r, hash, sideClient)
+		writeText(w, http.StatusInternalServerError, "Internal server error")
+		return outcomeError
+	}
+	h.reportStall(r, hash, sideStorage)
+	return h.storageFailure(w, r, errStalled)
 }

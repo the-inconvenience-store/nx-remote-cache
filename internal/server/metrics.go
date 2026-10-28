@@ -18,6 +18,7 @@ type metrics struct {
 	s3Durations *prometheus.HistogramVec
 	// unconditionalUploads counts PutObject calls sent without If-None-Match.
 	unconditionalUploads prometheus.Counter
+	stalls               *prometheus.CounterVec
 	// all lists every collector above for register.
 	all collectorList
 }
@@ -50,6 +51,11 @@ func newMetrics() *metrics {
 			Name: "nx_cache_unconditional_uploads_total",
 			Help: "Uploads sent to storage without If-None-Match because storage does not support conditional writes.",
 		}),
+		stalls: factory.NewCounterVec(prometheus.CounterOpts{
+			Name: "nx_cache_stalled_transfers_total",
+			Help: "Transfers stopped because no bytes moved for the stall timeout, " +
+				"by HTTP method and the side it was waiting on.",
+		}, []string{"method", "side"}),
 	}
 	m.all = all
 	return m

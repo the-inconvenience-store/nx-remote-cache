@@ -27,8 +27,10 @@ The evidence directory must not already exist; choose a new absolute path for
 later runs. The driver builds `./cmd/nx-remote-cache`, creates a uniquely named
 Garage v2.5.0 container using `dev/garage.toml`, allocates a loopback storage
 port, `PORT=0` and a free `METRICS_PORT` for the server, and waits up to 60
-seconds for readiness. It generates ephemeral credentials in memory, sets the
-bucket to `nx-cloud` and region to `garage`, and clears inherited
+seconds for readiness. The server reaches Garage through the driver's own
+loopback TCP relay, which can hold storage traffic to fake a stall, with
+`NX_CACHE_STALL_TIMEOUT=2s`. It generates ephemeral credentials in memory, sets
+the bucket to `nx-cloud` and region to `garage`, and clears inherited
 AWS/cache/TLS/metrics configuration.
 It does not read `.env.local` or launch the shared development Compose project.
 The script owns the server process handle and container name through teardown.
@@ -50,10 +52,12 @@ Doctor produces `INCONCLUSIVE`, a nonzero exit, and cleanup rather than a pass.
 The helper sends real HTTP requests with length-delimited binary payloads:
 miss → upload → byte-exact download → duplicate rejection → read-only download,
 a metrics scrape matching those requests and a 404 for `/metrics` on the cache
-port, unauthenticated/invalid-token rejection, read-only upload denial and
-absence, server restart with `METRICS_PORT=0` (metrics port refused) and
-byte-exact download, then storage shutdown and outage checks.
-It also proves missing-token startup exits 1. Every status is asserted; fixture
+port, a download and an upload that the relay stalls mid-body (stopped, logged
+and counted; see [stalls.md](features/stalls.md)), unauthenticated/invalid-token
+rejection, read-only upload denial and absence, server restart with
+`METRICS_PORT=0` (metrics port refused) and byte-exact download, then storage
+shutdown and outage checks. It also proves that startup with no access token or
+with `NX_CACHE_STALL_TIMEOUT=0s` exits 1. Every status is asserted; fixture
 bytes are compared and their SHA-256 digests recorded.
 
 Run the same route over verified TLS, trusting only the repository test CA:

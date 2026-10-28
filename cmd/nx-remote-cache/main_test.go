@@ -42,7 +42,7 @@ func TestLoadSettingsAppliesDefaults(t *testing.T) {
 	}
 	if s.port != 3000 || s.metricsPort != 9090 || s.server.Region != "us-east-1" || s.server.Bucket != "nx-cloud" ||
 		!s.server.FailOpen || s.server.ReadOnlyTokens != nil || s.tls != nil ||
-		s.server.AddressStyle != server.AddressStyleAuto {
+		s.server.AddressStyle != server.AddressStyleAuto || s.server.StallTimeout != time.Minute {
 		t.Fatalf("unexpected defaults: %+v", s)
 	}
 }
@@ -143,6 +143,25 @@ func TestLoadSettingsReadsMaxArtifactBytes(t *testing.T) {
 	}
 }
 
+func TestLoadSettingsReadsStallTimeout(t *testing.T) {
+	t.Parallel()
+	for value, want := range map[string]time.Duration{"90s": 90 * time.Second, "1m30s": 90 * time.Second, "500ms": 500 * time.Millisecond} {
+		values := validEnv()
+		values["NX_CACHE_STALL_TIMEOUT"] = value
+		s, err := loadSettings(env(values))
+		if err != nil || s.server.StallTimeout != want {
+			t.Errorf("NX_CACHE_STALL_TIMEOUT=%q: got %s, %v; want %s", value, s.server.StallTimeout, err, want)
+		}
+	}
+	for _, value := range []string{"", "60", "abc", "1x", " 60s"} {
+		values := validEnv()
+		values["NX_CACHE_STALL_TIMEOUT"] = value
+		if _, err := loadSettings(env(values)); !errors.Is(err, server.ErrStallTimeout) {
+			t.Errorf("NX_CACHE_STALL_TIMEOUT=%q: got %v, want %v", value, err, server.ErrStallTimeout)
+		}
+	}
+}
+
 func TestRunRejectsInvalidServerConfiguration(t *testing.T) {
 	t.Parallel()
 	cases := map[string]struct {
@@ -157,6 +176,9 @@ func TestRunRejectsInvalidServerConfiguration(t *testing.T) {
 		"empty read-only token": {"NX_CACHE_READ_ONLY_TOKEN", "", server.ErrReadOnlyToken},
 		"empty read-only item":  {"NX_CACHE_READ_ONLY_TOKEN", "r,", server.ErrReadOnlyToken},
 		"token in both lists":   {"NX_CACHE_READ_ONLY_TOKEN", "r, trusted", server.ErrSameTokens},
+		"zero stall timeout":    {"NX_CACHE_STALL_TIMEOUT", "0s", server.ErrStallTimeout},
+		"bare zero stall":       {"NX_CACHE_STALL_TIMEOUT", "0", server.ErrStallTimeout},
+		"negative stall":        {"NX_CACHE_STALL_TIMEOUT", "-5s", server.ErrStallTimeout},
 	}
 	for name, tc := range cases {
 		values := validEnv()

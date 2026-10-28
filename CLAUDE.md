@@ -47,6 +47,13 @@ mise pins all tools and runs tasks (`mise run <task>`):
   Plain-text bodies. S3 transport keeps up to 256 idle connections (SDK
   default 10 per host) so Nx's burst of parallel GETs reuses connections;
   SDK timeouts and retries otherwise unchanged.
+- Stall timeout (`internal/server/stall.go`): a `transfer` wraps the body the
+  server receives (S3 GET body, client PUT body). Each `Read` records progress
+  on entry (previous chunk passed on) and on bytes returned; a timer re-arms
+  from the latest progress and, after `NX_CACHE_STALL_TIMEOUT` idle, cancels
+  the S3 request context and expires the client connection deadline via
+  `http.ResponseController`. The handler attributes the stall to `storage` or
+  `client` by whether the body read failed. No total-time limit.
 - Cache request checks (`internal/server`): each `//` in the path becomes `/`
   before routing (no 307); after auth the hash must match
   `^[0-9A-Za-z_-]{1,128}$` (else 400); an upload whose Content-Length exceeds
@@ -56,10 +63,11 @@ mise pins all tools and runs tasks (`mise run <task>`):
 - Metrics (`internal/server/metrics.go`): declare every collector once in
   `newMetrics`; `New` registers them all with `Config.Metrics` (nil →
   unregistered) only after it succeeds.
-  `nx_cache_requests_total{method,outcome}` counts cache requests; never label
-  by hash. Byte counters count bytes actually read/written (`trackedBody`,
-  download copy), not declared lengths. S3 call durations come from one SDK
-  Initialize middleware (`timeS3Calls`) labelled by operation name.
+  `nx_cache_requests_total{method,outcome}` counts cache requests;
+  `nx_cache_stalled_transfers_total{method,side}` counts stopped transfers;
+  never label by hash. Byte counters count bytes actually read/written
+  (`receivedBody`, download copy), not declared lengths. S3 call durations come
+  from one SDK Initialize middleware (`timeS3Calls`) labelled by operation name.
 - `internal` must not import `cmd`.
 
 ## Testing
@@ -82,7 +90,8 @@ comma-separated token lists; empty item, duplicate or overlap → startup error)
 only with an endpoint), `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (both or
 neither; neither → default credential chain), `NX_CACHE_FAIL_OPEN` (true),
 `TLS_CERT_PATH` + `TLS_KEY_PATH` (both or neither), `NX_CACHE_MAX_ARTIFACT_BYTES`
-(0 = no limit). See README for rules.
+(0 = no limit), `NX_CACHE_STALL_TIMEOUT` (60s; Go duration > 0). See README for
+rules.
 
 ## CI
 

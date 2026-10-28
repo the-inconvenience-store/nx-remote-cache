@@ -106,7 +106,7 @@ func TestMissingBucketIsAStorageFailureNotAMiss(t *testing.T) {
 	h, err := server.New(context.Background(), &server.Config{
 		AccessTokens: []string{accessToken}, Bucket: "does-not-exist", Region: "us-east-1",
 		Endpoint: s3.URL, AccessKeyID: "test", SecretAccessKey: "test", FailOpen: false,
-		Logger: testLogger(&logs),
+		Logger: testLogger(&logs), StallTimeout: time.Minute,
 	})
 	if err != nil {
 		t.Fatal(err)

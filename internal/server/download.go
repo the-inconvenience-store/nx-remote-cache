@@ -37,17 +37,33 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request, req *cacheReq
 		w.Header().Set("Content-Length", strconv.FormatInt(*out.ContentLength, 10))
 	}
 	w.WriteHeader(http.StatusOK)
-	n, err := io.Copy(w, out.Body)
+	rc := http.NewResponseController(w)
+	body := startTransfer(out.Body, h.cfg.StallTimeout, func() {
+		cancel()
+		expireClientDeadline(rc.SetWriteDeadline)
+	})
+	n, err := io.Copy(w, body)
+	stalled := body.finish()
 	req.bytes = n
 	h.metrics.sent.Add(float64(n))
-	if err != nil {
-		req.outcome = outcomeError
-		h.log.ErrorContext(r.Context(), "Download interrupted", "hash", req.hash, "error", err)
-		// The status is already sent; abort so the client sees a truncated
-		// response instead of a short artifact that looks complete.
-		panic(http.ErrAbortHandler)
+	// A stall that fired as the copy ended has already expired the client's
+	// write deadline, so the response cannot be completed either.
+	if err == nil && !stalled {
+		req.outcome = outcomeHit
+		return
 	}
-	req.outcome = outcomeHit
+	req.outcome = outcomeError
+	switch {
+	case stalled && body.failed():
+		h.reportStall(r, req.hash, sideStorage)
+	case stalled:
+		h.reportStall(r, req.hash, sideClient)
+	default:
+		h.log.ErrorContext(r.Context(), "Download interrupted", "hash", req.hash, "error", err)
+	}
+	// The status is already sent; abort so the client sees a truncated
+	// response instead of a short artifact that looks complete.
+	panic(http.ErrAbortHandler)
 }
 
 func (h *handler) downloadFailed(w http.ResponseWriter, r *http.Request, err error) outcome {

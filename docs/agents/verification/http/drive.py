@@ -2,6 +2,7 @@
 """Drive the shipping server against disposable Garage; retain redacted evidence."""
 import argparse
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,7 @@ import socket
 import ssl
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -31,11 +33,81 @@ process = None
 log = None
 records = []
 verdict = "INCONCLUSIVE"
+STALL_SECONDS = 2
 
 
 def record(message):
     records.append(message)
     print(message, flush=True)
+
+
+class Relay:
+    """Forward loopback TCP to storage. After stall(), one direction forwards a
+    byte budget and then holds the rest without reading, as stalled storage does."""
+
+    def __init__(self, upstream):
+        host, port = upstream.rsplit(":", 1)
+        self.upstream = (host, int(port))
+        self.listener = socket.create_server(("127.0.0.1", 0))
+        self.port = self.listener.getsockname()[1]
+        self.lock = threading.Lock()
+        self.budget = {"up": None, "down": None}
+        self.resume = threading.Event()
+        self.resume.set()
+        threading.Thread(target=self.accept, daemon=True).start()
+
+    def stall(self, direction, after):
+        with self.lock:
+            self.budget[direction] = after
+        self.resume.clear()
+
+    def release(self):
+        with self.lock:
+            self.budget = {"up": None, "down": None}
+        self.resume.set()
+
+    def close(self):
+        self.release()
+        self.listener.close()
+
+    def accept(self):
+        while True:
+            try:
+                client, _ = self.listener.accept()
+            except OSError:
+                return
+            try:
+                storage = socket.create_connection(self.upstream, timeout=5)
+            except OSError:
+                client.close()
+                continue
+            storage.settimeout(None)
+            for src, dst, direction in ((client, storage, "up"), (storage, client, "down")):
+                threading.Thread(target=self.pipe, args=(src, dst, direction), daemon=True).start()
+
+    def pipe(self, src, dst, direction):
+        try:
+            while data := src.recv(65536):
+                with self.lock:
+                    budget = self.budget[direction]
+                    if budget is not None:
+                        data, held = data[:budget], data[budget:]
+                        self.budget[direction] = budget - len(data)
+                    else:
+                        held = b""
+                dst.sendall(data)
+                if held:
+                    self.resume.wait()
+                    dst.sendall(held)
+        except OSError:
+            pass
+        finally:
+            for sock in (src, dst):
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                sock.close()
 
 
 def command(*argv, **kwargs):
@@ -59,12 +131,40 @@ def expect(method, path, status, token=None, body=None, expected=None):
     return payload
 
 
+def stalled(method, path, token, body=None):
+    """Send a request whose transfer storage stalls; return the client's view and seconds taken."""
+    request = urllib.request.Request(base + path, data=body, headers={"Authorization": "Bearer " + token},
+                                     method=method)
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(request, timeout=30, context=context) as response:
+            view = f"{response.status}; bytes={len(response.read())}"
+    except urllib.error.HTTPError as error:
+        view = f"{error.code}; bytes={len(error.read())}"
+    except (http.client.HTTPException, OSError) as error:
+        view = f"connection ended: {type(error).__name__}"
+    elapsed = time.monotonic() - started
+    record(f"{method} {path} credential=redacted while storage stalls -> {view} after {elapsed:.1f}s")
+    return view, elapsed
+
+
 def scrape(prefix):
     with urllib.request.urlopen(f"http://127.0.0.1:{metrics_port}/metrics", timeout=15) as response:
         if response.status != 200:
             raise AssertionError(f"GET /metrics on the metrics port: expected 200, got {response.status}")
         text = response.read().decode()
     return sorted(line for line in text.splitlines() if line.startswith(prefix))
+
+
+def log_line(*fields):
+    """Return the one server log line containing every field."""
+    lines = [line for line in (scratch / "server.log").read_text().splitlines() if all(f in line for f in fields)]
+    if len(lines) != 1:
+        raise AssertionError(f"Expected one server log line with {fields}, found {len(lines)}")
+    return lines[0]
+
+
+relay = None
 
 
 try:
@@ -85,6 +185,7 @@ try:
             "--env", "GARAGE_DEFAULT_BUCKET", "dxflrs/garage:v2.5.0", "/garage", "server",
             "--single-node", "--default-bucket", env=env)
     endpoint = command("docker", "port", container, "3900/tcp").splitlines()[0]
+    relay = Relay(endpoint)
     trusted, reader = secrets.token_hex(24), secrets.token_hex(24)
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -92,8 +193,9 @@ try:
     env.update(PORT="0", METRICS_PORT=str(metrics_port), AWS_REGION="garage",
                AWS_ACCESS_KEY_ID=env["GARAGE_DEFAULT_ACCESS_KEY"],
                AWS_SECRET_ACCESS_KEY=env["GARAGE_DEFAULT_SECRET_KEY"], S3_BUCKET_NAME="nx-cloud",
-               S3_ENDPOINT_URL="http://" + endpoint, NX_CACHE_ACCESS_TOKEN=trusted,
-               NX_CACHE_READ_ONLY_TOKEN=reader, NX_CACHE_FAIL_OPEN="false" if args.fail_closed else "true")
+               S3_ENDPOINT_URL=f"http://127.0.0.1:{relay.port}", NX_CACHE_ACCESS_TOKEN=trusted,
+               NX_CACHE_READ_ONLY_TOKEN=reader, NX_CACHE_FAIL_OPEN="false" if args.fail_closed else "true",
+               NX_CACHE_STALL_TIMEOUT=f"{STALL_SECONDS}s")
     # Invalid startup must fail before serving; capture only the non-secret diagnostic.
     invalid_env = env.copy()
     invalid_env.pop("NX_CACHE_ACCESS_TOKEN")
@@ -101,6 +203,11 @@ try:
     if invalid.returncode != 1 or b"NX_CACHE_ACCESS_TOKEN" not in invalid.stderr:
         raise AssertionError("Missing-token startup did not exit 1 with its configuration diagnostic")
     record("Startup without access token -> exit 1 with NX_CACHE_ACCESS_TOKEN diagnostic")
+    invalid = subprocess.run([str(scratch / "server")], env={**env, "NX_CACHE_STALL_TIMEOUT": "0s"},
+                             capture_output=True, timeout=10)
+    if invalid.returncode != 1 or b"NX_CACHE_STALL_TIMEOUT" not in invalid.stderr:
+        raise AssertionError("Zero stall timeout did not exit 1 with its configuration diagnostic")
+    record("Startup with NX_CACHE_STALL_TIMEOUT=0s -> exit 1 with NX_CACHE_STALL_TIMEOUT diagnostic")
     context = None
     scheme = "http"
     if args.tls:
@@ -120,7 +227,7 @@ try:
             raise RuntimeError("Server did not emit its listening address")
         time.sleep(0.1)
     base = f"{scheme}://localhost:{match[1]}"
-    record(f"Launch: fresh server pid={process.pid}; {base}; isolated Garage")
+    record(f"Launch: fresh server pid={process.pid}; {base}; isolated Garage through a loopback relay")
     while True:
         try:
             request = urllib.request.Request(base + "/ready")
@@ -162,6 +269,36 @@ try:
         raise AssertionError("S3 duration histogram lacks a series for a driven operation")
     expect("GET", "/metrics", 404)
     record("Metrics proof: request, byte and S3 duration metrics on the metrics port; cache port 404s /metrics")
+    # Storage stops mid-transfer; the server must stop each transfer after the stall timeout.
+    large = path + "-large"
+    artifact = secrets.token_bytes(4 << 20)
+    expect("PUT", large, 200, token=trusted, body=artifact)
+    relay.stall("down", 64 << 10)
+    view, elapsed = stalled("GET", large, trusted)
+    relay.release()
+    if view.startswith(f"200; bytes={len(artifact)}") or not STALL_SECONDS <= elapsed < 15:
+        raise AssertionError(f"Stalled download: expected a cut-off response after {STALL_SECONDS}s")
+    hash_field = "hash=" + large.rsplit("/", 1)[1]
+    record("Server: " + log_line('msg="Transfer stalled" method=GET', hash_field, "side=storage"))
+    record("Server: " + log_line("msg=request method=GET", hash_field, "status=200", "outcome=error"))
+    relay.stall("up", 64 << 10)
+    stalled_put = path + "-stalled"
+    view, elapsed = stalled("PUT", stalled_put, trusted, body=bytes(32 << 20))
+    relay.release()
+    if not STALL_SECONDS <= elapsed < 15:
+        raise AssertionError(f"Stalled upload: expected an answer after {STALL_SECONDS}s")
+    hash_field = "hash=" + stalled_put.rsplit("/", 1)[1]
+    record("Server: " + log_line('msg="Transfer stalled" method=PUT', hash_field, "side=storage"))
+    answer = "status=503" if args.fail_closed else "status=403"
+    record("Server: " + log_line("msg=request method=PUT", hash_field, answer))
+    stalls = scrape("nx_cache_stalled_transfers_total{")
+    record("Metrics port /metrics: " + "; ".join(stalls))
+    if stalls != ['nx_cache_stalled_transfers_total{method="GET",side="storage"} 1',
+                  'nx_cache_stalled_transfers_total{method="PUT",side="storage"} 1']:
+        raise AssertionError("Stall counts do not match the stalled download and upload")
+    expect("GET", large, 200, token=trusted, expected=artifact)
+    expect("GET", stalled_put, 404, token=trusted)
+    record("Stall proof: stalled transfers stopped, logged and counted; storage serves again after the stall")
     expect("GET", path, 401)
     expect("GET", path, 401, token="invalid")
     denied = path + "-denied"
@@ -202,6 +339,8 @@ except Exception as error:
     record(f"{type(error).__name__}: {error}")
 finally:
     try:
+        if relay is not None:
+            relay.close()
         if process is not None:
             if process.poll() is None:
                 process.send_signal(signal.SIGTERM)

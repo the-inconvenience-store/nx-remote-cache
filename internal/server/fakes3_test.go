@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/the-inconvenience-store/nx-remote-cache/internal/server"
 )
@@ -153,6 +154,7 @@ func newHandler(t *testing.T, endpoint string, opts options) http.Handler {
 		SecretAccessKey: "test",
 		FailOpen:        failOpen,
 		Logger:          slog.New(slog.NewTextHandler(logOut, nil)),
+		StallTimeout:    time.Minute,
 	}
 	if opts.readOnly {
 		cfg.ReadOnlyTokens = []string{readOnlyToken}
