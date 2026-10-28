@@ -106,13 +106,14 @@ NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN=your-secure-token
 use the same Nx client variable, `NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN`;
 choose its value according to the job's trust level.
 
-Give the trusted credential only to protected builds that do not execute
-untrusted PR code. PR jobs may receive the read-only credential, or no
-credential if cache contents must remain private. A read-only upload returns
-HTTP 403 `Read-only credentials cannot upload artifacts`; missing or invalid
-credentials return HTTP 401. Authentication happens before the body is read or
-storage is contacted. Health and readiness checks remain unauthenticated.
-
+Give the read-write credential only to protected-branch jobs that do not
+execute untrusted PR code. Give PR jobs the read-only credential; this prevents
+cache poisoning via compromised pull requests
+([CREEP / CVE-2025-36852](https://nx.dev/blog/cve-2025-36852-critical-cache-poisoning-vulnerability-creep)).
+Read-only uploads return HTTP 403 `Read-only credentials cannot upload
+artifacts`; missing or invalid credentials return HTTP 401. Authentication
+happens before the body is read or storage is contacted. Health and readiness
+checks remain unauthenticated.
 Tokens are compared in constant time. Invalid token configuration prevents
 startup; omit the optional read-only setting rather than setting it to an empty
 string. Use HTTPS between clients and the server, whether TLS terminates here or
@@ -120,6 +121,89 @@ at a trusted proxy.
 
 For Helm, set `secrets.nxCacheReadOnlyToken`, or add the optional
 `nx-cache-read-only-token` key to the existing Secret.
+
+### Nx version and TLS
+
+Use Nx 22.7.7 or later, or Nx 23.0.2 or later; earlier affected versions have a
+cache poisoning vulnerability ([GHSA-vp3h-ghgh-jr7g](https://github.com/nrwl/nx/security/advisories/GHSA-vp3h-ghgh-jr7g)).
+
+For a private CA, configure the Nx native TLS client with `SSL_CERT_FILE` or
+`SSL_CERT_DIR`; `NODE_EXTRA_CA_CERTS` does not affect this client
+([rustls-native-certs](https://github.com/rustls/rustls-native-certs/blob/v/0.8.3/src/lib.rs#L52-L53)).
+Set `NX_SELF_HOSTED_REMOTE_CACHE_SERVER` to the server origin only, without a
+path ([Nx self-hosted cache specification](https://nx.dev/docs/kb/self-hosted-caching)).
+
+When the server is configured with `NX_CACHE_FAIL_OPEN=false`, a failed store
+can cause Nx to retry up to 6 times, sending the full artifact on each attempt
+([Nx retry implementation](https://github.com/nrwl/nx/blob/bf2f593d45d1f8a58458b2226326c3087544df2b/packages/nx/src/tasks-runner/cache.ts#L712-L734)).
+
+## S3 operator setup
+
+The cache does not implement least-recently-used eviction: lifecycle expiration
+removes objects by age. On a dedicated cache bucket, configure an expiration
+rule, for example, to expire current versions after 90 days and noncurrent
+versions after 30 days
+([S3 lifecycle expiration](https://docs.aws.amazon.com/AmazonS3/latest/userguide/lifecycle-expire-general-considerations.html)):
+
+```json
+{
+  "Rules": [
+    {
+      "ID": "ExpireNxCache",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "" },
+      "Expiration": { "Days": 90 },
+      "NoncurrentVersionExpiration": { "NoncurrentDays": 30 }
+    }
+  ]
+}
+```
+
+Grant the server only the following minimum bucket and object permissions; no
+delete permission is needed. `HeadObject` requires `s3:ListBucket` for missing
+keys: without it, S3 returns 403 rather than 404, so the server's default
+fail-open behavior silently stores nothing
+([HeadObject permissions](https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html)):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject"],
+      "Resource": "arn:aws:s3:::YOUR_BUCKET/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::YOUR_BUCKET"
+    }
+  ]
+}
+```
+
+To prevent overwrites, require the `If-None-Match` condition on object PUTs
+using the AWS `s3:if-none-match` condition key
+([enforce conditional writes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes-enforce.html)):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyPutWithoutIfNoneMatch",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::YOUR_BUCKET/*",
+      "Condition": {
+        "Null": { "s3:if-none-match": "true" }
+      }
+    }
+  ]
+}
+```
 
 ## Streaming uploads
 
