@@ -55,6 +55,14 @@ keeps read/write permission; the read-only token permits GET and gets 403 on
 PUT. Give PR jobs only the read-only token (or none if they must not read cached
 outputs).
 
+## Rotating tokens
+
+Both token keys accept a comma-separated list, and every listed token works:
+add the new token (`old-token,new-token`), move CI jobs to it, then remove the
+old one. The server does not start if an item is empty, a token is listed
+twice, or a token is in both lists. With `helm --set`, escape the comma
+(`--set 'secrets.nxCacheAccessToken=old-token\,new-token'`) or use a values file.
+
 ## IRSA / Workload Identity (no static AWS keys)
 
 When neither AWS key is set, the server uses the AWS SDK default credential

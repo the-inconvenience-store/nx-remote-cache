@@ -28,8 +28,8 @@ Invalid configuration prints an error to stderr and exits with status 1. See
 
 | Variable | Required | Default | Rules |
 | --- | --- | --- | --- |
-| `NX_CACHE_ACCESS_TOKEN` | yes | — | Trusted read/write token. Nonempty, no whitespace. |
-| `NX_CACHE_READ_ONLY_TOKEN` | no | unset | Download-only token. If set (even empty) it must be nonempty, contain no whitespace, and differ from `NX_CACHE_ACCESS_TOKEN`. |
+| `NX_CACHE_ACCESS_TOKEN` | yes | — | Trusted read/write tokens: a comma-separated list. Each token is nonempty, without whitespace. |
+| `NX_CACHE_READ_ONLY_TOKEN` | no | unset | Download-only tokens: a comma-separated list. If set (even empty), each token must be nonempty, contain no whitespace, and not appear in `NX_CACHE_ACCESS_TOKEN`. |
 | `PORT` | no | `3000` | Listen port. |
 | `AWS_REGION` | no | `us-east-1` | |
 | `S3_BUCKET_NAME` | no | `nx-cloud` | |
@@ -120,6 +120,18 @@ at a trusted proxy.
 
 For Helm, set `secrets.nxCacheReadOnlyToken`, or add the optional
 `nx-cache-read-only-token` key to the existing Secret.
+
+### Rotating tokens
+
+Both variables accept a comma-separated list, and every listed token works. To
+rotate without downtime, add the new token (`old-token,new-token`), move the CI
+jobs to it, then remove the old token. Spaces around each comma are removed.
+The server does not start if an item is empty (`a,,b` or a trailing comma), a
+token is listed twice, or a token is in both lists. A comma always separates
+tokens, so a token cannot contain a comma.
+
+With `helm --set`, escape each comma (`--set 'secrets.nxCacheAccessToken=old\,new'`)
+or set the value in a values file.
 
 ## Streaming uploads
 

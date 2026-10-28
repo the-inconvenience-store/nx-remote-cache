@@ -70,8 +70,9 @@ config:
 # Empty optional values are omitted from the chart-created Secret.
 secrets:
   existingSecret: ""
+  # Comma-separated list; list old and new tokens together to rotate them.
   nxCacheAccessToken: ""
-  # Optional; must differ from the trusted access token.
+  # Optional comma-separated list; no token may also be an access token.
   nxCacheReadOnlyToken: ""
   # Optional; set both or neither.
   awsAccessKeyId: ""

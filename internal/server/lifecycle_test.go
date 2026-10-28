@@ -130,19 +130,19 @@ func TestUploadWithoutContentLengthHeaderIsRejectedButExplicitZeroIsAllowed(t *t
 func TestTokenWhitespaceMatchesECMAScript(t *testing.T) {
 	t.Parallel()
 	base := server.Config{
-		AccessToken:     "trusted",
+		AccessTokens:    []string{"trusted"},
 		Bucket:          "b",
 		Region:          "us-east-1",
 		AccessKeyID:     "k",
 		SecretAccessKey: "s",
 	}
 	accepted := base
-	accepted.AccessToken = "a\u0085b" // not whitespace for JavaScript's \s
+	accepted.AccessTokens = []string{"a\u0085b"} // not whitespace for JavaScript's \s
 	if _, err := server.New(context.Background(), &accepted); err != nil {
 		t.Fatalf("token with U+0085 rejected: %v", err)
 	}
 	rejected := base
-	rejected.AccessToken = "a\ufeffb" // whitespace for JavaScript's \s
+	rejected.AccessTokens = []string{"a\ufeffb"} // whitespace for JavaScript's \s
 	if _, err := server.New(context.Background(), &rejected); !errors.Is(err, server.ErrAccessToken) {
 		t.Fatalf("token with U+FEFF: got %v, want %v", err, server.ErrAccessToken)
 	}
@@ -253,7 +253,7 @@ func TestStorageRejectionStopsReadingTheClientBody(t *testing.T) {
 func TestNewRejectsInvalidCredentialsConfiguration(t *testing.T) {
 	t.Parallel()
 	base := server.Config{
-		AccessToken:     "trusted",
+		AccessTokens:    []string{"trusted"},
 		Bucket:          "b",
 		Region:          "us-east-1",
 		AccessKeyID:     "k",
@@ -263,12 +263,36 @@ func TestNewRejectsInvalidCredentialsConfiguration(t *testing.T) {
 		mutate func(*server.Config)
 		want   error
 	}{
-		"empty access token":      {func(c *server.Config) { c.AccessToken = "" }, server.ErrAccessToken},
-		"whitespace access token": {func(c *server.Config) { c.AccessToken = "a b" }, server.ErrAccessToken},
-		"whitespace read token":   {func(c *server.Config) { c.ReadOnlyToken = "r o" }, server.ErrReadOnlyToken},
-		"same tokens":             {func(c *server.Config) { c.ReadOnlyToken = "trusted" }, server.ErrSameTokens},
-		"only key id":             {func(c *server.Config) { c.SecretAccessKey = "" }, server.ErrAWSCredentials},
-		"only secret":             {func(c *server.Config) { c.AccessKeyID = "" }, server.ErrAWSCredentials},
+		"no access token":    {func(c *server.Config) { c.AccessTokens = nil }, server.ErrAccessToken},
+		"empty access token": {func(c *server.Config) { c.AccessTokens = []string{""} }, server.ErrAccessToken},
+		"empty access item": {
+			func(c *server.Config) { c.AccessTokens = []string{"a", ""} },
+			server.ErrAccessToken,
+		},
+		"whitespace access token": {func(c *server.Config) { c.AccessTokens = []string{"a b"} }, server.ErrAccessToken},
+		"empty read token": {
+			func(c *server.Config) { c.ReadOnlyTokens = []string{""} },
+			server.ErrReadOnlyToken,
+		},
+		"empty read item": {
+			func(c *server.Config) { c.ReadOnlyTokens = []string{"r", ""} },
+			server.ErrReadOnlyToken,
+		},
+		"whitespace read token": {
+			func(c *server.Config) { c.ReadOnlyTokens = []string{"r o"} },
+			server.ErrReadOnlyToken,
+		},
+		"token in both lists": {
+			func(c *server.Config) { c.ReadOnlyTokens = []string{"r", "trusted"} }, server.ErrSameTokens,
+		},
+		"duplicate access token": {
+			func(c *server.Config) { c.AccessTokens = []string{"a", "trusted", "a"} }, server.ErrDuplicateToken,
+		},
+		"duplicate read token": {
+			func(c *server.Config) { c.ReadOnlyTokens = []string{"r", "r"} }, server.ErrDuplicateToken,
+		},
+		"only key id": {func(c *server.Config) { c.SecretAccessKey = "" }, server.ErrAWSCredentials},
+		"only secret": {func(c *server.Config) { c.AccessKeyID = "" }, server.ErrAWSCredentials},
 	}
 	for name, tc := range cases {
 		cfg := base

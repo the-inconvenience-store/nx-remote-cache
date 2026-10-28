@@ -109,6 +109,8 @@ type options struct {
 	readOnly bool
 	failOpen *bool
 	logs     *bytes.Buffer
+	// configure adjusts the config after defaults are applied.
+	configure func(*server.Config)
 }
 
 func newHandler(t *testing.T, endpoint string, opts options) http.Handler {
@@ -122,7 +124,7 @@ func newHandler(t *testing.T, endpoint string, opts options) http.Handler {
 		logOut = &lockedWriter{w: opts.logs}
 	}
 	cfg := server.Config{
-		AccessToken:     accessToken,
+		AccessTokens:    []string{accessToken},
 		Bucket:          testBucket,
 		Region:          "us-east-1",
 		Endpoint:        endpoint,
@@ -132,7 +134,10 @@ func newHandler(t *testing.T, endpoint string, opts options) http.Handler {
 		Logger:          slog.New(slog.NewTextHandler(logOut, nil)),
 	}
 	if opts.readOnly {
-		cfg.ReadOnlyToken = readOnlyToken
+		cfg.ReadOnlyTokens = []string{readOnlyToken}
+	}
+	if opts.configure != nil {
+		opts.configure(&cfg)
 	}
 	h, err := server.New(context.Background(), &cfg)
 	if err != nil {

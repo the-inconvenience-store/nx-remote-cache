@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -39,8 +40,23 @@ func TestLoadSettingsAppliesDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if s.port != 3000 || s.server.Region != "us-east-1" || s.server.Bucket != "nx-cloud" ||
-		!s.server.FailOpen || s.server.ReadOnlyToken != "" || s.tls != nil {
+		!s.server.FailOpen || s.server.ReadOnlyTokens != nil || s.tls != nil {
 		t.Fatalf("unexpected defaults: %+v", s)
+	}
+}
+
+func TestLoadSettingsSplitsTokenListsAtCommas(t *testing.T) {
+	t.Parallel()
+	values := validEnv()
+	values["NX_CACHE_ACCESS_TOKEN"] = "old , new,next"
+	values["NX_CACHE_READ_ONLY_TOKEN"] = "read-old  ,  read-new"
+	s, err := loadSettings(env(values))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(s.server.AccessTokens, []string{"old", "new", "next"}) ||
+		!slices.Equal(s.server.ReadOnlyTokens, []string{"read-old", "read-new"}) {
+		t.Fatalf("got access %q, read-only %q", s.server.AccessTokens, s.server.ReadOnlyTokens)
 	}
 }
 
@@ -54,7 +70,6 @@ func TestLoadSettingsRejectsInvalidConfiguration(t *testing.T) {
 		"port out of range":   {"PORT", "70000", errPort},
 		"bad fail-open":       {"NX_CACHE_FAIL_OPEN", "maybe", errFailOpen},
 		"empty fail-open":     {"NX_CACHE_FAIL_OPEN", "", errFailOpen},
-		"empty read token":    {"NX_CACHE_READ_ONLY_TOKEN", "", server.ErrReadOnlyToken},
 		"cert without key":    {"TLS_CERT_PATH", "testdata/cert.pem", errTLSPair},
 		"unreadable key pair": {"TLS_KEY_PATH", "missing.pem", errTLSPair},
 	}
@@ -72,11 +87,26 @@ func TestLoadSettingsRejectsInvalidConfiguration(t *testing.T) {
 
 func TestRunRejectsInvalidServerConfiguration(t *testing.T) {
 	t.Parallel()
-	values := validEnv()
-	values["NX_CACHE_ACCESS_TOKEN"] = ""
-	err := run(context.Background(), env(values), io.Discard)
-	if !errors.Is(err, server.ErrAccessToken) {
-		t.Fatalf("got %v, want %v", err, server.ErrAccessToken)
+	cases := map[string]struct {
+		key, value string
+		want       error
+	}{
+		"empty access token":    {"NX_CACHE_ACCESS_TOKEN", "", server.ErrAccessToken},
+		"empty access item":     {"NX_CACHE_ACCESS_TOKEN", "a,,b", server.ErrAccessToken},
+		"trailing comma":        {"NX_CACHE_ACCESS_TOKEN", "a, ", server.ErrAccessToken},
+		"space outside list":    {"NX_CACHE_ACCESS_TOKEN", " a,b", server.ErrAccessToken},
+		"duplicate token":       {"NX_CACHE_ACCESS_TOKEN", "trusted, trusted", server.ErrDuplicateToken},
+		"empty read-only token": {"NX_CACHE_READ_ONLY_TOKEN", "", server.ErrReadOnlyToken},
+		"empty read-only item":  {"NX_CACHE_READ_ONLY_TOKEN", "r,", server.ErrReadOnlyToken},
+		"token in both lists":   {"NX_CACHE_READ_ONLY_TOKEN", "r, trusted", server.ErrSameTokens},
+	}
+	for name, tc := range cases {
+		values := validEnv()
+		values["PORT"] = "0"
+		values[tc.key] = tc.value
+		if err := run(context.Background(), env(values), io.Discard); !errors.Is(err, tc.want) {
+			t.Errorf("%s: got %v, want %v", name, err, tc.want)
+		}
 	}
 }
 

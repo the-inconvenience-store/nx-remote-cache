@@ -48,7 +48,7 @@ func newBackendHandler(t *testing.T, b *s3test.Backend, opts backendServer) http
 		opts.logs = &bytes.Buffer{}
 	}
 	h, err := server.New(context.Background(), &server.Config{
-		AccessToken: accessToken, ReadOnlyToken: readOnlyToken,
+		AccessTokens: []string{accessToken}, ReadOnlyTokens: []string{readOnlyToken},
 		Bucket: opts.bucket, Region: b.Region, Endpoint: b.Endpoint,
 		AccessKeyID: b.AccessKeyID, SecretAccessKey: opts.secret,
 		FailOpen: true, Logger: testLogger(opts.logs),

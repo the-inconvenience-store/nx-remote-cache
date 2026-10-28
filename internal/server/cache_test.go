@@ -3,6 +3,8 @@ package server_test
 import (
 	"net/http"
 	"testing"
+
+	"github.com/the-inconvenience-store/nx-remote-cache/internal/server"
 )
 
 func TestHealthNeedsNoAuthOrStorage(t *testing.T) {
@@ -40,6 +42,24 @@ func TestCacheRoutesRejectMissingOrInvalidTokens(t *testing.T) {
 			expect(t, status, body, http.StatusUnauthorized, "Missing or invalid authentication token")
 		}
 	}
+}
+
+func TestEveryListedTokenIsAccepted(t *testing.T) {
+	t.Parallel()
+	h := newHandler(t, newFakeS3(t).URL, options{configure: func(c *server.Config) {
+		c.AccessTokens = []string{"old-write", "new-write"}
+		c.ReadOnlyTokens = []string{"old-read", "new-read"}
+	}})
+	for _, token := range []string{"old-write", "new-write"} {
+		status, body := put(t, h, token, token, "by "+token)
+		expect(t, status, body, http.StatusOK, "Successfully uploaded")
+	}
+	for _, token := range []string{"old-write", "new-write", "old-read", "new-read"} {
+		status, body := get(t, h, "old-write", token)
+		expect(t, status, body, http.StatusOK, "by old-write")
+	}
+	status, body := put(t, h, "denied", "new-read", "data")
+	expect(t, status, body, http.StatusForbidden, "Read-only credentials cannot upload artifacts")
 }
 
 func TestUploadRequiresContentLength(t *testing.T) {

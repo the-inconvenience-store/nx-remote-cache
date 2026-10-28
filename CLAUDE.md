@@ -33,11 +33,12 @@ mise pins all tools and runs tasks (`mise run <task>`):
   IdleTimeout 120s), graceful shutdown on SIGTERM/SIGINT (25s drain).
 - `internal/server` — `New(Config) (http.Handler, error)`. Stdlib routing:
   `GET /health`, `GET /ready` (HeadBucket, 2s), `PUT`/`GET /v1/cache/{hash}`.
-  Bearer auth with constant-time compare before reading body or touching
-  storage; read-only token may only GET. Uploads stream with Content-Length,
-  HeadObject then PutObject with `If-None-Match: *` (dropped per process once
-  storage reports it unsupported). Storage failures: fail-open (default) →
-  GET 404 / PUT 403; `NX_CACHE_FAIL_OPEN=false` → 503. Plain-text bodies.
+  Bearer auth with constant-time compare against every listed token before
+  reading body or touching storage; read-only tokens may only GET. Uploads
+  stream with Content-Length, HeadObject then PutObject with `If-None-Match: *`
+  (dropped per process once storage reports it unsupported). Storage failures:
+  fail-open (default) → GET 404 / PUT 403; `NX_CACHE_FAIL_OPEN=false` → 503.
+  Plain-text bodies.
 - `internal` must not import `cmd`.
 
 ## Testing
@@ -52,7 +53,8 @@ mise pins all tools and runs tasks (`mise run <task>`):
 
 ## Environment Variables
 
-Required: `NX_CACHE_ACCESS_TOKEN`. Optional: `NX_CACHE_READ_ONLY_TOKEN`,
+Required: `NX_CACHE_ACCESS_TOKEN`. Optional: `NX_CACHE_READ_ONLY_TOKEN` (both
+comma-separated token lists; empty item, duplicate or overlap → startup error),
 `PORT` (3000), `AWS_REGION` (us-east-1), `S3_BUCKET_NAME` (nx-cloud),
 `S3_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (both or
 neither; neither → default credential chain), `NX_CACHE_FAIL_OPEN` (true),

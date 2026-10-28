@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -72,15 +73,15 @@ func loadSettings(lookup lookupFunc) (settings, error) {
 	if err != nil {
 		return settings{}, err
 	}
-	readOnly, readOnlySet := lookup("NX_CACHE_READ_ONLY_TOKEN")
-	if readOnlySet && readOnly == "" {
-		return settings{}, server.ErrReadOnlyToken
-	}
 	tlsConfig, err := loadTLS(lookup)
 	if err != nil {
 		return settings{}, err
 	}
 	access, _ := lookup("NX_CACHE_ACCESS_TOKEN")
+	var readOnlyTokens []string
+	if readOnly, ok := lookup("NX_CACHE_READ_ONLY_TOKEN"); ok {
+		readOnlyTokens = splitTokens(readOnly)
+	}
 	endpoint, _ := lookup("S3_ENDPOINT_URL")
 	keyID, _ := lookup("AWS_ACCESS_KEY_ID")
 	secret, _ := lookup("AWS_SECRET_ACCESS_KEY")
@@ -88,8 +89,8 @@ func loadSettings(lookup lookupFunc) (settings, error) {
 		port: port,
 		tls:  tlsConfig,
 		server: server.Config{
-			AccessToken:     access,
-			ReadOnlyToken:   readOnly,
+			AccessTokens:    splitTokens(access),
+			ReadOnlyTokens:  readOnlyTokens,
 			Bucket:          valueOr(lookup, "S3_BUCKET_NAME", "nx-cloud"),
 			Region:          valueOr(lookup, "AWS_REGION", "us-east-1"),
 			Endpoint:        endpoint,
@@ -98,6 +99,22 @@ func loadSettings(lookup lookupFunc) (settings, error) {
 			FailOpen:        failOpen,
 		},
 	}, nil
+}
+
+// splitTokens splits a comma-separated token list and removes the spaces
+// around each comma. Empty items stay in the list so that validation rejects them.
+func splitTokens(list string) []string {
+	tokens := strings.Split(list, ",")
+	last := len(tokens) - 1
+	for i := range tokens {
+		if i > 0 {
+			tokens[i] = strings.TrimLeft(tokens[i], " ")
+		}
+		if i < last {
+			tokens[i] = strings.TrimRight(tokens[i], " ")
+		}
+	}
+	return tokens
 }
 
 // valueOr treats unset and empty variables alike, matching the original server.

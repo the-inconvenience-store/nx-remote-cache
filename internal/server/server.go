@@ -17,9 +17,14 @@ import (
 
 // Configuration errors returned by New.
 var (
-	ErrAccessToken     = errors.New("NX_CACHE_ACCESS_TOKEN must be a nonempty token without whitespace")
-	ErrReadOnlyToken   = errors.New("NX_CACHE_READ_ONLY_TOKEN must be a nonempty token without whitespace")
-	ErrSameTokens      = errors.New("read-only and trusted cache tokens must be different")
+	ErrAccessToken = errors.New(
+		"NX_CACHE_ACCESS_TOKEN must be a comma-separated list of nonempty tokens without whitespace")
+	ErrReadOnlyToken = errors.New(
+		"NX_CACHE_READ_ONLY_TOKEN must be a comma-separated list of nonempty tokens without whitespace")
+	ErrSameTokens = errors.New(
+		"a token must not be in both NX_CACHE_ACCESS_TOKEN and NX_CACHE_READ_ONLY_TOKEN")
+	ErrDuplicateToken = errors.New(
+		"a token must not be listed twice in NX_CACHE_ACCESS_TOKEN or NX_CACHE_READ_ONLY_TOKEN")
 	ErrAWSCredentials  = errors.New("AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set together")
 	ErrBucketNotConfig = errors.New("S3 bucket name must not be empty")
 )
@@ -28,12 +33,13 @@ const readyTimeout = 2 * time.Second
 
 // Config holds validated runtime settings for the cache server.
 type Config struct {
-	// AccessToken grants read and write access.
-	AccessToken string
-	// ReadOnlyToken, when non-empty, grants download-only access.
-	ReadOnlyToken string
-	Bucket        string
-	Region        string
+	// AccessTokens grant read and write access; at least one is required.
+	// Several tokens let operators rotate them without downtime.
+	AccessTokens []string
+	// ReadOnlyTokens grant download-only access.
+	ReadOnlyTokens []string
+	Bucket         string
+	Region         string
 	// Endpoint overrides the S3 endpoint; requests always use path-style URLs.
 	Endpoint string
 	// AccessKeyID and SecretAccessKey select static credentials. When both are
@@ -79,16 +85,8 @@ func New(ctx context.Context, cfg *Config) (http.Handler, error) {
 }
 
 func validate(cfg *Config) error {
-	if !wellFormedToken(cfg.AccessToken) {
-		return ErrAccessToken
-	}
-	if cfg.ReadOnlyToken != "" {
-		if !wellFormedToken(cfg.ReadOnlyToken) {
-			return ErrReadOnlyToken
-		}
-		if cfg.ReadOnlyToken == cfg.AccessToken {
-			return ErrSameTokens
-		}
+	if err := validateTokens(cfg.AccessTokens, cfg.ReadOnlyTokens); err != nil {
+		return err
 	}
 	if (cfg.AccessKeyID == "") != (cfg.SecretAccessKey == "") {
 		return ErrAWSCredentials
@@ -97,6 +95,40 @@ func validate(cfg *Config) error {
 		return ErrBucketNotConfig
 	}
 	return nil
+}
+
+func validateTokens(access, readOnly []string) error {
+	if len(access) == 0 {
+		return ErrAccessToken
+	}
+	writers, err := tokenSet(access, ErrAccessToken)
+	if err != nil {
+		return err
+	}
+	if _, err := tokenSet(readOnly, ErrReadOnlyToken); err != nil {
+		return err
+	}
+	for _, token := range readOnly {
+		if _, both := writers[token]; both {
+			return ErrSameTokens
+		}
+	}
+	return nil
+}
+
+// tokenSet returns malformed for any ill-formed token and rejects repeats.
+func tokenSet(tokens []string, malformed error) (map[string]struct{}, error) {
+	set := make(map[string]struct{}, len(tokens))
+	for _, token := range tokens {
+		if !wellFormedToken(token) {
+			return nil, malformed
+		}
+		if _, repeated := set[token]; repeated {
+			return nil, ErrDuplicateToken
+		}
+		set[token] = struct{}{}
+	}
+	return set, nil
 }
 
 func wellFormedToken(token string) bool {
@@ -128,17 +160,27 @@ func (h *handler) access(r *http.Request) access {
 	if !ok || !wellFormedToken(token) {
 		return accessNone
 	}
-	if tokensEqual(token, h.cfg.AccessToken) {
+	write := matchesAny(token, h.cfg.AccessTokens)
+	read := matchesAny(token, h.cfg.ReadOnlyTokens)
+	switch {
+	case write:
 		return accessWrite
-	}
-	if h.cfg.ReadOnlyToken != "" && tokensEqual(token, h.cfg.ReadOnlyToken) {
+	case read:
 		return accessRead
+	default:
+		return accessNone
 	}
-	return accessNone
 }
 
-func tokensEqual(a, b string) bool {
-	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+// matchesAny compares token with every candidate, without stopping at a match,
+// so response timing does not reveal which candidate matched.
+func matchesAny(token string, candidates []string) bool {
+	given := []byte(token)
+	match := 0
+	for _, candidate := range candidates {
+		match |= subtle.ConstantTimeCompare(given, []byte(candidate))
+	}
+	return match == 1
 }
 
 func health(w http.ResponseWriter, _ *http.Request) {
