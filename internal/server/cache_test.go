@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -39,6 +40,33 @@ func TestCacheRoutesRejectMissingOrInvalidTokens(t *testing.T) {
 			status, body := doWithHeader(t, h, call{method: method, path: "/v1/cache/abc"}, header)
 			expect(t, status, body, http.StatusUnauthorized, "Missing or invalid authentication token")
 		}
+	}
+}
+
+func TestAuthErrorsHaveExactTextPlainContentType(t *testing.T) {
+	t.Parallel()
+	h := newHandler(t, newFakeS3(t).URL, options{readOnly: true})
+
+	for _, tc := range []struct {
+		name, method, token string
+		wantStatus          int
+	}{
+		{name: "unauthorized", method: http.MethodGet, token: "wrong", wantStatus: http.StatusUnauthorized},
+		{name: "forbidden", method: http.MethodPut, token: readOnlyToken, wantStatus: http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := httptest.NewRequestWithContext(t.Context(), tc.method, "/v1/cache/abc", nil)
+			req.Header.Set("Authorization", "Bearer "+tc.token)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.wantStatus)
+			}
+			if got := rec.Header().Get("Content-Type"); got != "text/plain" {
+				t.Errorf("Content-Type = %q, want %q", got, "text/plain")
+			}
+		})
 	}
 }
 
