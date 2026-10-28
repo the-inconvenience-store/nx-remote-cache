@@ -149,6 +149,10 @@ request, nothing is stored, and the server returns 500. A retry requires a fresh
 client request. Memory use scales with concurrent stream buffers, not artifact
 size.
 
+The S3 client keeps up to 256 idle connections, so the burst of parallel
+downloads at the start of an Nx run reuses storage connections instead of
+opening and closing one per request.
+
 ## Upload compatibility
 
 Uploads first check for an existing object with `HeadObject` (409 if present),

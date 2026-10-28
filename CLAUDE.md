@@ -38,7 +38,9 @@ mise pins all tools and runs tasks (`mise run <task>`):
   stream with Content-Length, HeadObject then PutObject with `If-None-Match: *`
   (dropped per process once storage reports it unsupported). Storage failures:
   fail-open (default) → GET 404 / PUT 403; `NX_CACHE_FAIL_OPEN=false` → 503.
-  Plain-text bodies.
+  Plain-text bodies. S3 transport keeps up to 256 idle connections (SDK
+  default 10 per host) so Nx's burst of parallel GETs reuses connections;
+  SDK timeouts and retries otherwise unchanged.
 - `internal` must not import `cmd`.
 
 ## Testing
@@ -46,7 +48,8 @@ mise pins all tools and runs tasks (`mise run <task>`):
 - Unit: package `server_test` exercises the handler against an httptest fake S3.
 - `//go:build integration`: testcontainers-go via `internal/s3test`. Feature
   tests run on Garage (ignores `If-None-Match`) and versitygw (enforces it);
-  the 20-round atomic-write race runs on versitygw only.
+  the 20-round atomic-write race runs on versitygw only. A Garage-only test
+  counts S3 connections through a TCP proxy across two 200-GET bursts.
 - `//go:build e2e` (`e2e/`): Nx 23.3 builds on both backends: miss + upload,
   read-only remote hit, rebuild during storage outage.
 - `//go:build s3contract`: env-configured contract against real S3.
