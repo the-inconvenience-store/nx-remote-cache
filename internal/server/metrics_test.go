@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"maps"
@@ -64,6 +65,23 @@ func TestMainPortDoesNotServeMetrics(t *testing.T) {
 	h := newHandler(t, newFakeS3(t).URL, options{configure: withMetrics(prometheus.NewRegistry())})
 	status, body := do(t, h, call{method: http.MethodGet, path: "/metrics"})
 	expect(t, status, body, http.StatusNotFound, "404 page not found\n")
+}
+
+// Not parallel: t.Setenv makes the AWS configuration fail to load.
+func TestMetricsRegistryUntouchedWhenNewFails(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	cfg := server.Config{
+		AccessTokens: []string{accessToken}, Bucket: testBucket, Region: "us-east-1",
+		AccessKeyID: "test", SecretAccessKey: "test", Metrics: registry,
+	}
+	t.Setenv("AWS_PROFILE", "nx-cache-missing-profile")
+	if _, err := server.New(context.Background(), &cfg); err == nil {
+		t.Fatal("New succeeded with a missing AWS profile")
+	}
+	t.Setenv("AWS_PROFILE", "")
+	if _, err := server.New(context.Background(), &cfg); err != nil {
+		t.Fatalf("New after a failed New with the same registry: %v", err)
+	}
 }
 
 func TestMetricsCountTransferredBytes(t *testing.T) {

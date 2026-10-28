@@ -79,7 +79,7 @@ func New(ctx context.Context, cfg *Config) (http.Handler, error) {
 	if err := validate(cfg); err != nil {
 		return nil, err
 	}
-	h := &handler{cfg: *cfg, log: cfg.Logger, metrics: newMetrics(cfg.Metrics)}
+	h := &handler{cfg: *cfg, log: cfg.Logger, metrics: newMetrics()}
 	if h.log == nil {
 		h.log = slog.Default()
 	}
@@ -88,6 +88,8 @@ func New(ctx context.Context, cfg *Config) (http.Handler, error) {
 		return nil, err
 	}
 	h.s3 = client
+	// Registered last, so a failed New leaves the registry untouched.
+	h.metrics.register(cfg.Metrics)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", health)

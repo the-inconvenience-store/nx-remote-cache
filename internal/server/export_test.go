@@ -10,5 +10,5 @@ import (
 //
 //nolint:gochecknoglobals // test-only export
 var NewS3Client = func(ctx context.Context, cfg *Config) (*s3.Client, error) {
-	return newS3Client(ctx, cfg, newMetrics(nil).timeS3Calls)
+	return newS3Client(ctx, cfg, newMetrics().timeS3Calls)
 }

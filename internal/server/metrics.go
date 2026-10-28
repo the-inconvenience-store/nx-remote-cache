@@ -16,13 +16,16 @@ type metrics struct {
 	received    prometheus.Counter
 	sent        prometheus.Counter
 	s3Durations *prometheus.HistogramVec
+	// all lists every collector above for register.
+	all collectorList
 }
 
-// newMetrics creates the collectors and registers them with reg. A nil reg
-// leaves them unregistered, so nothing exposes them.
-func newMetrics(reg prometheus.Registerer) *metrics {
-	factory := promauto.With(reg)
-	return &metrics{
+// newMetrics creates the collectors without registering them, so the S3
+// client can use them before New knows it will succeed.
+func newMetrics() *metrics {
+	var all collectorList
+	factory := promauto.With(&all)
+	m := &metrics{
 		requests: factory.NewCounterVec(prometheus.CounterOpts{
 			Name: "nx_cache_requests_total",
 			Help: "Cache requests by HTTP method and outcome.",
@@ -42,6 +45,33 @@ func newMetrics(reg prometheus.Registerer) *metrics {
 			Buckets: prometheus.DefBuckets,
 		}, []string{"operation"}),
 	}
+	m.all = all
+	return m
+}
+
+// register registers every collector with reg; a nil reg leaves them
+// unregistered, so nothing exposes them.
+func (m *metrics) register(reg prometheus.Registerer) {
+	if reg != nil {
+		reg.MustRegister(m.all...)
+	}
+}
+
+// collectorList is a prometheus.Registerer that only records collectors, so
+// newMetrics can declare each one once with promauto and register them later.
+type collectorList []prometheus.Collector
+
+func (l *collectorList) Register(c prometheus.Collector) error {
+	*l = append(*l, c)
+	return nil
+}
+
+func (l *collectorList) MustRegister(cs ...prometheus.Collector) {
+	*l = append(*l, cs...)
+}
+
+func (*collectorList) Unregister(prometheus.Collector) bool {
+	return false
 }
 
 // countRequests counts each cache request by method and outcome once it ends,
