@@ -1,7 +1,7 @@
 //go:build e2e
 
 // Package e2e_test drives real Nx 23.3 builds against the nx-remote-cache
-// binary and a Garage container. It needs Docker and Node.js (npx).
+// binary on Garage and versitygw containers. It needs Docker and Node.js (npx).
 package e2e_test
 
 import (
@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,7 +27,7 @@ const (
 	readOnlyToken = "e2e-read-only-token"
 	nxVersion     = "23.3"
 	workspaceName = "e2e-workspace"
-	project       = "@org/shop"
+	project       = "@e2e-workspace/shop"
 	// Nx 23 summarises cache use per run; after `nx reset` a hit can only come
 	// from the remote cache.
 	missMarker   = "Cache:             0/1 hit"
@@ -164,14 +165,34 @@ func createWorkspace(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	cmd := exec.CommandContext(t.Context(), "npx", "-y", "create-nx-workspace@"+nxVersion, workspaceName,
-		"--preset=react-monorepo", "--bundler=vite", "--style=css",
+		"--preset=react-monorepo", "--appName=shop", "--bundler=vite", "--style=css",
 		"--e2eTestRunner=none", "--unitTestRunner=none", "--linter=none", "--formatter=none",
 		"--aiAgents=none", "--nxCloud=skip", "--skipGit", "--interactive=false")
 	cmd.Dir = dir
+	cmd.Env = withoutAIAgentEnv(os.Environ())
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("create workspace: %v\n%s", err, out)
 	}
 	return filepath.Join(dir, workspaceName)
+}
+
+// withoutAIAgentEnv drops variables create-nx-workspace treats as "running under
+// an AI agent". In that mode it swaps --preset for a GitHub template fetched at
+// HEAD (a different Nx version and project layout), so local runs inside an
+// agent would stop matching CI.
+func withoutAIAgentEnv(environ []string) []string {
+	agentVars := []string{
+		"CLAUDECODE", "CLAUDE_CODE", "OPENCODE", "CODEX_THREAD_ID", "SUPERSET_AGENT_ID",
+		"COPILOT_CLI", "REPL_ID", "CURSOR_TRACE_ID", "GEMINI_CLI",
+	}
+	kept := make([]string, 0, len(environ))
+	for _, kv := range environ {
+		name, _, _ := strings.Cut(kv, "=")
+		if !slices.Contains(agentVars, name) {
+			kept = append(kept, kv)
+		}
+	}
+	return kept
 }
 
 // nxBuild clears local Nx state first so every build consults the remote cache.
