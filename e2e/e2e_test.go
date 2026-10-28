@@ -53,10 +53,19 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
+// nxVersions are the Nx versions under test; NX_VERSION selects one (CI runs
+// one matrix job per version).
+func nxVersions() []string {
+	if v := os.Getenv("NX_VERSION"); v != "" {
+		return []string{v}
+	}
+	return []string{"23.3.0", "24.0.2"}
+}
+
 func TestNxUsesRemoteCacheAndSurvivesStorageOutage(t *testing.T) {
 	t.Parallel()
 	binary := buildServer(t)
-	for _, version := range []string{"23.3.0", "24.0.2"} {
+	for _, version := range nxVersions() {
 		t.Run(version, func(t *testing.T) {
 			t.Parallel()
 			for name, start := range s3test.Starters() {
@@ -181,7 +190,9 @@ func createWorkspace(t *testing.T, version string) string {
 		"--e2eTestRunner=none", "--unitTestRunner=none", "--linter=none", "--formatter=none",
 		"--aiAgents=none", "--nxCloud=skip", "--skipGit", "--interactive=false")
 	cmd.Dir = dir
-	cmd.Env = withoutAIAgentEnv(os.Environ())
+	// Parallel npx runs sharing one cache race on its install directory
+	// (ENOTEMPTY, half-installed packages), so each workspace gets its own.
+	cmd.Env = append(withoutAIAgentEnv(os.Environ()), "npm_config_cache="+t.TempDir())
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("create workspace: %v\n%s", err, out)
 	}
