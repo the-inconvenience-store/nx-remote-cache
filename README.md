@@ -244,7 +244,11 @@ atomic-write race runs on versitygw. The S3 contract test (`s3contract` tag) is
 optional and runs against a bucket you configure.
 
 Tool pins in `mise.toml` are updated with `mise upgrade --bump`. Dependabot
-(Go modules, Docker base images, GitHub Actions) is added once CI is enabled.
+updates Go modules, Docker base images and GitHub Actions weekly.
+
+Releases: publishing a GitHub release `vX.Y.Z` builds and pushes the image
+(`X.Y.Z`, `X.Y`, `X`, `latest`) and the Helm chart (`X.Y.Z`) to GHCR. Every push
+to `main` also pushes `main` and `sha-<short>` image tags.
 
 ## Acknowledgements
 
