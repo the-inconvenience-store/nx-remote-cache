@@ -28,16 +28,17 @@ const (
 	heldBurstDeadline = 4 * time.Second
 )
 
-// countingProxy forwards TCP connections to an S3 backend and counts how many
-// the server opens. Responses wait until release, so a burst can be held open
-// until every request has its own connection.
+// countingProxy forwards TCP connections to an S3 backend and counts the
+// connections the server opens and the requests it sends. While held, it
+// withholds responses, so every request of a burst is in flight at once.
 type countingProxy struct {
 	URL      string
 	target   string
 	opened   atomic.Int64
-	held     chan struct{}
-	release  func()
+	requests atomic.Int64
+
 	mu       sync.Mutex
+	gate     chan struct{}
 	upstream []net.Conn
 }
 
@@ -51,11 +52,8 @@ func startCountingProxy(t *testing.T, endpoint string) *countingProxy {
 	if err != nil {
 		t.Fatal(err)
 	}
-	held := make(chan struct{})
-	p := &countingProxy{
-		URL: "http://" + listener.Addr().String(), target: target.Host,
-		held: held, release: sync.OnceFunc(func() { close(held) }),
-	}
+	p := &countingProxy{URL: "http://" + listener.Addr().String(), target: target.Host, gate: make(chan struct{})}
+	close(p.gate)
 	t.Cleanup(func() {
 		p.release()
 		_ = listener.Close()
@@ -67,6 +65,29 @@ func startCountingProxy(t *testing.T, endpoint string) *countingProxy {
 	})
 	go p.serve(listener)
 	return p
+}
+
+// hold withholds responses until release.
+func (p *countingProxy) hold() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.gate = make(chan struct{})
+}
+
+func (p *countingProxy) release() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	select {
+	case <-p.gate:
+	default:
+		close(p.gate)
+	}
+}
+
+func (p *countingProxy) currentGate() chan struct{} {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.gate
 }
 
 func (p *countingProxy) serve(listener net.Listener) {
@@ -90,16 +111,34 @@ func (p *countingProxy) forward(client net.Conn) {
 	p.upstream = append(p.upstream, upstream)
 	p.mu.Unlock()
 	go func() {
-		_, _ = io.Copy(upstream, client)
+		// A bodiless GET arrives in one read: count each as a request.
+		copyChunks(upstream, client, func() { p.requests.Add(1) })
 		_ = upstream.Close()
 	}()
-	<-p.held
-	_, _ = io.Copy(client, upstream)
+	copyChunks(client, upstream, func() { <-p.currentGate() })
+}
+
+// copyChunks copies src to dst, calling before ahead of each chunk.
+func copyChunks(dst io.Writer, src io.Reader, before func()) {
+	buf := make([]byte, 32<<10)
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			before()
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 // TestParallelDownloadsReuseStorageConnections sends the burst of parallel GETs
-// Nx makes at the start of a run, twice. The first burst is held until it has
-// opened one S3 connection per GET; the second must reuse those connections.
+// Nx makes at the start of a run, twice, holding storage responses until every
+// GET of a burst is in flight. The first burst needs one S3 connection per GET;
+// the second must reuse them instead of dialling again.
 func TestParallelDownloadsReuseStorageConnections(t *testing.T) {
 	t.Parallel()
 	b := s3test.StartGarage(t)
@@ -113,7 +152,11 @@ func TestParallelDownloadsReuseStorageConnections(t *testing.T) {
 	viaProxy.Endpoint = proxy.URL
 	h := newBackendHandler(t, &viaProxy, backendServer{})
 
-	burst := func() (wait func()) {
+	// heldBurst sends downloadBurst parallel GETs and returns how many new S3
+	// connections they opened.
+	heldBurst := func() int64 {
+		openedBefore, requestsBefore := proxy.opened.Load(), proxy.requests.Load()
+		proxy.hold()
 		var wg sync.WaitGroup
 		for range downloadBurst {
 			wg.Go(func() {
@@ -126,25 +169,24 @@ func TestParallelDownloadsReuseStorageConnections(t *testing.T) {
 				}
 			})
 		}
-		return wg.Wait
+		deadline := time.Now().Add(heldBurstDeadline)
+		for proxy.requests.Load()-requestsBefore < downloadBurst && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		inFlight := proxy.requests.Load() - requestsBefore
+		proxy.release()
+		wg.Wait()
+		if inFlight < downloadBurst {
+			t.Fatalf("only %d of %d GETs reached storage while responses were held", inFlight, downloadBurst)
+		}
+		return proxy.opened.Load() - openedBefore
 	}
 
-	waitFirst := burst()
-	deadline := time.Now().Add(heldBurstDeadline)
-	for proxy.opened.Load() < downloadBurst && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if got := proxy.opened.Load(); got != downloadBurst {
-		t.Fatalf("first burst opened %d S3 connections, want one per GET (%d)", got, downloadBurst)
-	}
-	proxy.release()
-	waitFirst()
-
-	burst()()
-	opened := proxy.opened.Load() - downloadBurst
-	t.Logf("second burst of %d parallel GETs opened %d new S3 connections", downloadBurst, opened)
-	if opened > downloadBurst/10 {
+	first := heldBurst()
+	second := heldBurst()
+	t.Logf("new S3 connections per burst of %d parallel GETs: first %d, second %d", downloadBurst, first, second)
+	if second > downloadBurst/10 {
 		t.Fatalf("second burst of %d parallel GETs opened %d new S3 connections; want far fewer",
-			downloadBurst, opened)
+			downloadBurst, second)
 	}
 }
