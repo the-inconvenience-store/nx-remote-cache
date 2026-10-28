@@ -45,7 +45,9 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request, req *cacheReq
 	n, err := io.Copy(w, body)
 	stalled := body.finish()
 	req.bytes = n
-	if err == nil {
+	// A stall that fired as the copy ended has already expired the client's
+	// write deadline, so the response cannot be completed either.
+	if err == nil && !stalled {
 		req.outcome = outcomeHit
 		return
 	}

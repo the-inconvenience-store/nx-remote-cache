@@ -43,7 +43,7 @@ Invalid configuration prints an error to stderr and exits with status 1. See
 | `AWS_SECRET_ACCESS_KEY` | no | unset | See above. |
 | `NX_CACHE_FAIL_OPEN` | no | `true` | `true` or `false`; anything else is an error. See [Cache outages](#cache-outages). |
 | `NX_CACHE_MAX_ARTIFACT_BYTES` | no | `0` (no limit) | Largest upload `Content-Length` in bytes; a whole number of 0 or more, anything else is an error. A larger upload gets 403 and is not stored. See [Streaming uploads](#streaming-uploads). |
-| `NX_CACHE_STALL_TIMEOUT` | no | `60s` | Stop a transfer when the server receives no bytes of it for this long. A [Go duration](https://pkg.go.dev/time#ParseDuration) greater than zero, such as `30s` or `2m`; anything else, including empty, is an error. See [Stalled transfers](#stalled-transfers). |
+| `NX_CACHE_STALL_TIMEOUT` | no | `60s` | Stop a transfer when none of its bytes move for this long. A [Go duration](https://pkg.go.dev/time#ParseDuration) greater than zero, such as `30s` or `2m`; anything else, including empty, is an error. See [Stalled transfers](#stalled-transfers). |
 | `TLS_CERT_PATH` | no | unset | PEM certificate. Set both TLS paths or neither; both → HTTPS. |
 | `TLS_KEY_PATH` | no | unset | PEM private key. |
 
@@ -336,13 +336,15 @@ The server cannot protect against these failures:
 
 Nx's cache client has no read or total timeout, so a transfer that stops
 without an error would hang the Nx run. The server stops an artifact transfer
-when it receives no bytes of it for `NX_CACHE_STALL_TIMEOUT` (default `60s`).
-The clock restarts with each chunk the server receives: from S3 for a
-download, from Nx for an upload. A slow transfer that keeps moving is never
-stopped, and there is no limit on the total transfer time.
+when none of its bytes move for `NX_CACHE_STALL_TIMEOUT` (default `60s`). The
+clock restarts each time the server receives a chunk of the artifact (from S3
+for a download, from Nx for an upload) and each time it has passed a chunk on.
+A slow transfer that keeps moving is never stopped, and there is no limit on
+the total transfer time. Chunks are up to 32 KiB, so a transfer slower than one
+chunk per timeout counts as stalled.
 
-The server stops receiving when either end stops: the sender stops sending, or
-the receiver stops taking bytes and the connection buffers fill. A client that
+Bytes stop moving when either end stops: the sender stops sending, or the
+receiver stops taking bytes and the connection buffers fill. A client that
 stops sending an upload therefore stalls it too, because storage receives
 nothing. When the clock runs out, the server cancels the S3 request, releases
 any read or write blocked on the Nx connection, and answers by the side it was

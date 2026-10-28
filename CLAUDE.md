@@ -46,11 +46,12 @@ mise pins all tools and runs tasks (`mise run <task>`):
   default 10 per host) so Nx's burst of parallel GETs reuses connections;
   SDK timeouts and retries otherwise unchanged.
 - Stall timeout (`internal/server/stall.go`): a `transfer` wraps the body the
-  server receives (S3 GET body, client PUT body); each chunk restarts a
-  `NX_CACHE_STALL_TIMEOUT` timer. On expiry it cancels the S3 request context
-  and expires the client connection deadline via `http.ResponseController`,
-  then the handler attributes the stall to `storage` or `client` by which read
-  failed. No total-time limit.
+  server receives (S3 GET body, client PUT body). Each `Read` records progress
+  on entry (previous chunk passed on) and on bytes returned; a timer re-arms
+  from the latest progress and, after `NX_CACHE_STALL_TIMEOUT` idle, cancels
+  the S3 request context and expires the client connection deadline via
+  `http.ResponseController`. The handler attributes the stall to `storage` or
+  `client` by whether the body read failed. No total-time limit.
 - Cache request checks (`internal/server`): each `//` in the path becomes `/`
   before routing (no 307); after auth the hash must match
   `^[0-9A-Za-z_-]{1,128}$` (else 400); an upload whose Content-Length exceeds

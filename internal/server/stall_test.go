@@ -34,7 +34,7 @@ func stallServer(t *testing.T, endpoint string, logs *bytes.Buffer) (*httptest.S
 func expectStalls(t *testing.T, registry *prometheus.Registry, samples ...string) {
 	t.Helper()
 	want := `
-# HELP nx_cache_stalled_transfers_total Transfers stopped because the server received no bytes for the stall timeout, ` +
+# HELP nx_cache_stalled_transfers_total Transfers stopped because no bytes moved for the stall timeout, ` +
 		`by HTTP method and the side it was waiting on.
 # TYPE nx_cache_stalled_transfers_total counter
 ` + strings.Join(samples, "\n") + "\n"
@@ -165,6 +165,57 @@ func TestSlowDownloadThatKeepsSendingCompletes(t *testing.T) {
 	if elapsed := time.Since(start); elapsed < 3*testStallTimeout {
 		t.Fatalf("download took %s; the test needs it to outlast the stall timeout several times", elapsed)
 	}
+	expectNoStalls(t, registry)
+}
+
+// slowClient is a client connection that takes delay to accept each write, as
+// a connection with full buffers does.
+type slowClient struct {
+	*httptest.ResponseRecorder
+	delay time.Duration
+}
+
+func (c slowClient) Write(p []byte) (int, error) {
+	time.Sleep(c.delay)
+	return c.ResponseRecorder.Write(p)
+}
+
+// Bytes passed on to the client are progress too: storage may pause for longer
+// than the stall timeout if the server spent part of that pause passing the
+// previous chunk on.
+func TestDownloadKeepsMovingWhileTheClientTakesEachChunk(t *testing.T) {
+	t.Parallel()
+	const (
+		timeout      = 500 * time.Millisecond
+		storageGap   = 600 * time.Millisecond
+		clientAccept = 250 * time.Millisecond
+	)
+	chunks := []string{"first,", "second,", "third"}
+	s3 := newFakeS3(t)
+	s3.override = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Method != http.MethodGet {
+			return false
+		}
+		for i, chunk := range chunks {
+			if i > 0 {
+				time.Sleep(storageGap)
+			}
+			_, _ = io.WriteString(w, chunk)
+			_ = http.NewResponseController(w).Flush()
+		}
+		return true
+	}
+	registry := prometheus.NewRegistry()
+	h := newHandler(t, s3.URL, options{configure: func(c *server.Config) {
+		c.Metrics = registry
+		c.StallTimeout = timeout
+	}})
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/cache/abc", http.NoBody)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	client := slowClient{ResponseRecorder: httptest.NewRecorder(), delay: clientAccept}
+	h.ServeHTTP(client, req)
+	expect(t, client.Code, client.Body.String(), http.StatusOK, strings.Join(chunks, ""))
 	expectNoStalls(t, registry)
 }
 

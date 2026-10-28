@@ -24,7 +24,7 @@ func newMetrics(reg prometheus.Registerer) *metrics {
 		}, []string{"method", "outcome"}),
 		stalls: factory.NewCounterVec(prometheus.CounterOpts{
 			Name: "nx_cache_stalled_transfers_total",
-			Help: "Transfers stopped because the server received no bytes for the stall timeout, " +
+			Help: "Transfers stopped because no bytes moved for the stall timeout, " +
 				"by HTTP method and the side it was waiting on.",
 		}, []string{"method", "side"}),
 	}

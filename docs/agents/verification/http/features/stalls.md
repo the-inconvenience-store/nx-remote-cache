@@ -3,7 +3,7 @@
 ## User outcome
 
 A transfer that stops without an error does not hang the Nx run. The server
-stops it once it receives no bytes for `NX_CACHE_STALL_TIMEOUT`, logs it, and
+stops it once none of its bytes move for `NX_CACHE_STALL_TIMEOUT`, logs it, and
 counts it in `nx_cache_stalled_transfers_total`. A zero, negative or invalid
 timeout stops startup.
 

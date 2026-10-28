@@ -59,9 +59,9 @@ type Config struct {
 	// FailOpen degrades storage failures into cache misses (GET 404) and
 	// non-fatal "not stored" responses (PUT 403) instead of 503.
 	FailOpen bool
-	// StallTimeout stops an artifact transfer when the server receives no
-	// bytes of it for this long. It must be positive; there is no limit on the
-	// total transfer time.
+	// StallTimeout stops an artifact transfer when none of its bytes move for
+	// this long. It must be positive; there is no limit on the total transfer
+	// time.
 	StallTimeout time.Duration
 	Logger       *slog.Logger
 	// Metrics receives the server's collectors. Nil leaves them unregistered.

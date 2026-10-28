@@ -95,7 +95,7 @@ the AWS env refs are `optional: true`.
   GET returns 404 (cache miss) and PUT returns 403 (not stored) so Nx keeps
   building. Set `false` to return 503 and fail the Nx run instead.
 - `config.stallTimeout` (`NX_CACHE_STALL_TIMEOUT`, default `60s`): a transfer
-  in which the server receives no bytes for this long is stopped, so a stalled
+  whose bytes stop moving for this long is stopped, so a stalled
   S3 transfer cannot hang the Nx run. A stalled upload to storage is answered
   like any other storage failure.
 
@@ -166,7 +166,7 @@ helm install nx-cache oci://ghcr.io/the-inconvenience-store/charts/nx-remote-cac
 | `config.metricsPort` | `9090` | `METRICS_PORT`; Prometheus `/metrics` port, `0` turns metrics off |
 | `config.failOpen` | `true` | `NX_CACHE_FAIL_OPEN`; `false` returns 503 on storage failures |
 | `config.maxArtifactBytes` | `0` | `NX_CACHE_MAX_ARTIFACT_BYTES`; `0` is no limit; larger uploads get 403 and are not stored; anything but a whole number of 0 or more stops startup |
-| `config.stallTimeout` | `60s` | `NX_CACHE_STALL_TIMEOUT`; stop a transfer when the server receives no bytes for this long; a Go duration greater than zero, anything else stops startup |
+| `config.stallTimeout` | `60s` | `NX_CACHE_STALL_TIMEOUT`; stop a transfer when none of its bytes move for this long; a Go duration greater than zero, anything else stops startup |
 | `config.awsRegion` | `us-east-1` | `AWS_REGION` |
 | `config.s3.bucketName` | `nx-cloud` | `S3_BUCKET_NAME` |
 | `config.s3.endpointUrl` | `""` | `S3_ENDPOINT_URL`; omitted when empty (AWS S3) |
