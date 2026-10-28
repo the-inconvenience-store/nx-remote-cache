@@ -14,13 +14,15 @@ Use the verification skill's Maintain route when commands or surfaces change.
 
 ## Scope
 
-The direct driver builds the current checkout and uses real Garage, not a fake
-S3 service. The existing Nx harness covers actual consumer builds and both
-Garage and versitygw. A direct HTTP run does not prove Nx compatibility,
-conditional-write atomicity on another backend, image packaging, a Kubernetes
-deployment, IRSA, or production S3 permissions. Run the corresponding existing
-consumer/integration/contract harness or deploy to a disposable environment
-when those are the changed paths. See the surface map for exact commands.
+The direct driver builds the current checkout and uses real Garage, reached
+through the driver's own loopback relay, not a fake S3 service. The relay only
+forwards bytes until the stall step holds them. The existing Nx harness covers
+actual consumer builds and both Garage and versitygw. A direct HTTP run does
+not prove Nx compatibility, conditional-write atomicity on another backend,
+image packaging, a Kubernetes deployment, IRSA, or production S3 permissions.
+Run the corresponding existing consumer/integration/contract harness or deploy
+to a disposable environment when those are the changed paths. See the surface
+map for exact commands.
 
 Guardrail setup was intentionally skipped; existing mise tasks, CI, hooks,
 formatters, and dependency/tool pins remain authoritative and unchanged.
@@ -37,6 +39,11 @@ Local evidence remains outside repository cleanup:
 - `/tmp/nx-cache-verification-http/`
 - `/tmp/nx-cache-verification-tls/`
 - `/tmp/nx-cache-verification-closed/`
+
+After the stall timeout was added, the default HTTP mode completed with
+`VERIFIED` again (`/tmp/nx-cache-verification-stall-final/`), adding stalled
+download and upload proofs and the zero-timeout startup rejection. The TLS and
+fail-closed modes were not rerun with the relay.
 
 Each directory contains `transcript.txt`, `server.log`, and `result.json`.
 These temporary evidence paths are machine-local, not portable fixtures.
