@@ -11,5 +11,11 @@ spec:
       targetPort: http
       protocol: TCP
       name: http
+    {{- if .Values.serviceMonitor.enabled }}
+    - port: {{ .Values.config.metricsPort }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+    {{- end }}
   selector:
     {{- include "nx-remote-cache.selectorLabels" . | nindent 4 }}

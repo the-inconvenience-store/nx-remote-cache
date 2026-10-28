@@ -1,0 +1,22 @@
+{{- if .Values.serviceMonitor.enabled }}
+{{- if eq (int .Values.config.metricsPort) 0 }}
+{{- fail "serviceMonitor.enabled requires config.metricsPort to be greater than 0" }}
+{{- end }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "nx-remote-cache.fullname" . }}
+  labels:
+    {{- include "nx-remote-cache.labels" . | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      {{- include "nx-remote-cache.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: metrics
+      path: /metrics
+      scheme: http
+{{- end }}
