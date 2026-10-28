@@ -11,6 +11,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,10 +40,20 @@ func TestLoadSettingsAppliesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.port != 3000 || s.server.Region != "us-east-1" || s.server.Bucket != "nx-cloud" ||
+	if s.port != 3000 || s.metricsPort != 9090 || s.server.Region != "us-east-1" || s.server.Bucket != "nx-cloud" ||
 		!s.server.FailOpen || s.server.ReadOnlyTokens != nil || s.tls != nil ||
 		s.server.AddressStyle != server.AddressStyleAuto {
 		t.Fatalf("unexpected defaults: %+v", s)
+	}
+}
+
+func TestLoadSettingsDisablesMetricsWithPortZero(t *testing.T) {
+	t.Parallel()
+	values := validEnv()
+	values["METRICS_PORT"] = "0"
+	s, err := loadSettings(env(values))
+	if err != nil || s.metricsPort != 0 {
+		t.Fatalf("got metrics port %d, %v; want 0 (disabled)", s.metricsPort, err)
 	}
 }
 
@@ -93,6 +104,9 @@ func TestLoadSettingsRejectsInvalidConfiguration(t *testing.T) {
 		"unreadable key pair": {"TLS_KEY_PATH", "missing.pem", errTLSPair},
 		"bad path style":      {"S3_FORCE_PATH_STYLE", "yes", errForcePathStyle},
 		"empty path style":    {"S3_FORCE_PATH_STYLE", "", errForcePathStyle},
+		"bad metrics port":    {"METRICS_PORT", "metrics", errMetricsPort},
+		"empty metrics port":  {"METRICS_PORT", "", errMetricsPort},
+		"metrics port range":  {"METRICS_PORT", "65536", errMetricsPort},
 	}
 	for name, tc := range cases {
 		values := validEnv()
@@ -147,6 +161,7 @@ func TestRunRejectsInvalidServerConfiguration(t *testing.T) {
 	for name, tc := range cases {
 		values := validEnv()
 		values["PORT"] = "0"
+		values["METRICS_PORT"] = "0"
 		values[tc.key] = tc.value
 		if err := run(context.Background(), env(values), io.Discard); !errors.Is(err, tc.want) {
 			t.Errorf("%s: got %v, want %v", name, err, tc.want)
@@ -184,7 +199,37 @@ func TestServeUsesTLSWhenConfigured(t *testing.T) {
 	assertServes(t, &s, client, "https")
 }
 
-func assertServes(t *testing.T, s *settings, client *http.Client, scheme string) {
+func TestServeExposesMetricsOnMetricsListener(t *testing.T) {
+	t.Parallel()
+	s, err := loadSettings(env(validEnv()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, mainPort := listen(t)
+	metricsListener, metricsPort := listen(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- serve(ctx, &s, listener, metricsListener, io.Discard) }()
+
+	// Storage at 127.0.0.1:1 is unreachable, so fail-open answers a miss.
+	cacheReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		"http://localhost:"+strconv.Itoa(mainPort)+"/v1/cache/abc", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cacheReq.Header.Set("Authorization", "Bearer trusted")
+	if status, _ := fetch(t, http.DefaultClient, cacheReq); status != http.StatusNotFound {
+		t.Fatalf("cache GET: status %d, want 404", status)
+	}
+	status, body := fetch(t, http.DefaultClient, newGet(t, "http://localhost:"+strconv.Itoa(metricsPort)+"/metrics"))
+	want := `nx_cache_requests_total{method="GET",outcome="degraded"} 1`
+	if status != http.StatusOK || !strings.Contains(body, want) {
+		t.Fatalf("metrics: %d, want 200 containing %q:\n%s", status, want, body)
+	}
+	expectShutdown(t, cancel, done)
+}
+
+func listen(t *testing.T) (net.Listener, int) {
 	t.Helper()
 	listener, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -194,26 +239,31 @@ func assertServes(t *testing.T, s *settings, client *http.Client, scheme string)
 	if !ok {
 		t.Fatalf("listener address %T is not TCP", listener.Addr())
 	}
-	port := addr.Port
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- serve(ctx, s, listener, io.Discard) }()
+	return listener, addr.Port
+}
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
-		scheme+"://localhost:"+strconv.Itoa(port)+"/health", http.NoBody)
+func newGet(t *testing.T, url string) *http.Request {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return req
+}
+
+func fetch(t *testing.T, client *http.Client, req *http.Request) (int, string) {
+	t.Helper()
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || string(body) != "OK" {
-		t.Fatalf("health: %d %q", resp.StatusCode, body)
-	}
+	return resp.StatusCode, string(body)
+}
 
+func expectShutdown(t *testing.T, cancel context.CancelFunc, done <-chan error) {
+	t.Helper()
 	cancel()
 	select {
 	case err := <-done:
@@ -223,4 +273,18 @@ func assertServes(t *testing.T, s *settings, client *http.Client, scheme string)
 	case <-time.After(5 * time.Second):
 		t.Fatal("serve did not return after context cancellation")
 	}
+}
+
+func assertServes(t *testing.T, s *settings, client *http.Client, scheme string) {
+	t.Helper()
+	listener, port := listen(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- serve(ctx, s, listener, nil, io.Discard) }()
+
+	status, body := fetch(t, client, newGet(t, scheme+"://localhost:"+strconv.Itoa(port)+"/health"))
+	if status != http.StatusOK || body != "OK" {
+		t.Fatalf("health: %d %q", status, body)
+	}
+	expectShutdown(t, cancel, done)
 }
