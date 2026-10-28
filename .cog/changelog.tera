@@ -1,0 +1,19 @@
+{#- Changelog template without commit authors: release notes must not name people. -#}
+{% if version.tag -%}
+## {{ version.tag }} - {{ date | date(format="%Y-%m-%d") }}
+{% else -%}
+{% set from = commits | last -%}
+## Unreleased ({{ from.id | truncate(length=7, end="") }}..{{ version.id | truncate(length=7, end="") }})
+{% endif -%}
+
+{% for value in commits | group_by_type -%}
+### {{ value.0 | upper_first }}
+{% for scope, scoped_commits in value.1 | group_by(attribute="scope") -%}
+{% for commit in scoped_commits | sort(attribute="scope") -%}
+- {% if commit.breaking_change %}**BREAKING** {% endif %}(**{{ commit.scope }}**) {{ commit.summary }} - ([{{ commit.id | truncate(length=7, end="") }}]({{ repository_url }}/commit/{{ commit.id }}))
+{% endfor -%}
+{% endfor -%}
+{% for commit in value.1 | unscoped -%}
+- {% if commit.breaking_change %}**BREAKING** {% endif %}{{ commit.summary }} - ([{{ commit.id | truncate(length=7, end="") }}]({{ repository_url }}/commit/{{ commit.id }}))
+{% endfor %}
+{% endfor -%}
