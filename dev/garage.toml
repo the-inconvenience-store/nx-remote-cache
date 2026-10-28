@@ -1,0 +1,16 @@
+# Single-node Garage for local development (compose.yaml). Not for production:
+# the RPC secret is public and data lives in a throwaway Docker volume.
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "sqlite"
+
+replication_factor = 1
+
+rpc_bind_addr = "[::]:3901"
+rpc_public_addr = "127.0.0.1:3901"
+rpc_secret = "8318c7f67c86be019998d672267f932cd1c86a3b126a84b72208ccac9f64f80d"
+
+[s3_api]
+s3_region = "garage"
+api_bind_addr = "[::]:3900"
+root_domain = ".s3.garage.localhost"

@@ -1,12 +1,31 @@
-FROM denoland/deno:2.9.7
+# syntax=docker/dockerfile:1
 
-WORKDIR /app
+# Cross-compile on the build host's native platform; no emulation needed.
+FROM --platform=$BUILDPLATFORM golang:1.27.3 AS build
 
-# Copy only the manifests first so dependency installation stays cached.
-COPY deno.json deno.lock ./
-RUN deno install
+ARG TARGETOS
+ARG TARGETARCH
 
-# Copy only the server entrypoint — never the whole build context.
-COPY src/index.ts ./src/index.ts
+WORKDIR /src
 
-CMD ["deno", "task", "start"]
+# Download modules first so they stay cached until go.mod/go.sum change.
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+COPY cmd ./cmd
+COPY internal ./internal
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags='-s -w' -o /out/nx-remote-cache ./cmd/nx-remote-cache
+
+FROM gcr.io/distroless/static-debian12:nonroot
+
+COPY --from=build /out/nx-remote-cache /nx-remote-cache
+
+EXPOSE 3000
+# distroless `nonroot` (65532), numeric so Kubernetes runAsNonRoot can verify it.
+USER 65532:65532
+ENTRYPOINT ["/nx-remote-cache"]

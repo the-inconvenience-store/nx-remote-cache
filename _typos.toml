@@ -1,0 +1,8 @@
+[files]
+# Generated lockfiles and vendored specs: checksums and upstream text, not prose we own.
+extend-exclude = [
+  "go.sum",
+  "deno.lock",
+  "charts/**/Chart.lock",
+  "docs/*.json",
+]

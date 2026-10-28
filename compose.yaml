@@ -1,0 +1,23 @@
+# Local S3 for `mise run dev`: single-node Garage with the `nx-cloud` bucket and a
+# fixed access key (matching .env.local) created on startup.
+services:
+  garage:
+    image: dxflrs/garage:v2.5.0
+    command: ['/garage', 'server', '--single-node', '--default-bucket']
+    environment:
+      GARAGE_DEFAULT_ACCESS_KEY: GK11111111111111111111111111
+      GARAGE_DEFAULT_SECRET_KEY: '1111111111111111111111111111111111111111111111111111111111111111'
+      GARAGE_DEFAULT_BUCKET: nx-cloud
+    ports:
+      - '127.0.0.1:3900:3900'
+    volumes:
+      - ./dev/garage.toml:/etc/garage.toml:ro
+      - garage-data:/var/lib/garage
+    healthcheck:
+      test: ['CMD', '/garage', 'bucket', 'info', 'nx-cloud']
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  garage-data:

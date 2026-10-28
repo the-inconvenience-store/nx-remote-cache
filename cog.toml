@@ -1,0 +1,6 @@
+# Conventional Commits, enforced by the lefthook commit-msg hook (`cog verify`)
+# and on pull request commits in CI (`cog check`). The default commit types
+# apply: feat, fix, build, chore, ci, docs, style, refactor, perf, test, revert.
+tag_prefix = "v"
+ignore_merge_commits = true
+ignore_fixup_commits = false

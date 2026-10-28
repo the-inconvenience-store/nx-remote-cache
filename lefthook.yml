@@ -1,0 +1,48 @@
+# Git hooks; install with `mise run bootstrap` (runs `lefthook install`).
+# Every tool runs through `mise exec --` so the versions pinned in mise.toml are used.
+
+pre-commit:
+  parallel: true
+  jobs:
+    - name: go-fmt
+      glob: '*.go'
+      run: mise exec -- golangci-lint fmt {staged_files}
+      stage_fixed: true
+
+    - name: go-lint
+      glob:
+        - '*.go'
+        - go.mod
+        - go.sum
+        - .golangci.yml
+      run: mise exec -- golangci-lint run
+
+    - name: hadolint
+      glob: Dockerfile
+      run: mise exec -- hadolint {staged_files}
+
+    - name: actionlint
+      glob:
+        - .github/workflows/*.yml
+        - .github/workflows/*.yaml
+      run: mise exec -- actionlint {staged_files}
+
+    - name: typos
+      run: mise exec -- typos --force-exclude {staged_files}
+
+    - name: helm-lint
+      glob: charts/**
+      run: >-
+        mise exec -- helm lint charts/nx-remote-cache
+        --set secrets.nxCacheAccessToken=lint
+        --set config.s3.endpointUrl=http://localhost:3900
+
+commit-msg:
+  jobs:
+    - name: cog-verify
+      run: mise exec -- cog verify --file {1}
+
+pre-push:
+  jobs:
+    - name: unit-tests
+      run: mise run test

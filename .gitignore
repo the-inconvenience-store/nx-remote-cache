@@ -1,5 +1,13 @@
 .env
 
-tmp
+tmp/
 
 .DS_Store
+
+# Go build and test artifacts
+/nx-remote-cache
+/dist/
+*.test
+coverage.html
+*.coverprofile
+*.out

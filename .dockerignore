@@ -1,8 +1,12 @@
-# Deny everything, then allow-list only what the runtime image needs.
+# Deny everything, then allow-list only what the Go build needs.
 # Keeps `.git` (which carries the ephemeral CI checkout token in
-# `http.extraheader`), `.env*` files, tests and TLS fixtures out of the image.
+# `http.extraheader`), `.env*` files, tests and TLS fixtures out of the build context.
 *
 
-!deno.json
-!deno.lock
-!src/index.ts
+!go.mod
+!go.sum
+!cmd/
+!internal/
+
+**/*_test.go
+**/testdata/

@@ -1,0 +1,254 @@
+version: '2'
+
+run:
+  # Lint build-tagged suites too (integration, Nx E2E, S3 contract).
+  build-tags:
+    - integration
+    - e2e
+    - s3contract
+  modules-download-mode: readonly
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  default: none
+  enable:
+    # Correctness
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - bodyclose
+    - noctx
+    - contextcheck
+    - containedctx
+    - fatcontext
+    - errorlint
+    - nilerr
+    - nilnesserr
+    - nilnil
+    - errname
+    - errchkjson
+    - durationcheck
+    - copyloopvar
+    - intrange
+    - makezero
+    - reassign
+    - recvcheck
+    - exhaustive
+    - forcetypeassert
+    - asasalint
+    - gocheckcompilerdirectives
+    # Complexity and size
+    - cyclop
+    - gocognit
+    - funlen
+    - nestif
+    - maintidx
+    # Style and hygiene
+    - revive
+    - nolintlint
+    - godox
+    - forbidigo
+    - mnd
+    - goconst
+    - depguard
+    - dupl
+    - dupword
+    - misspell
+    - whitespace
+    - modernize
+    - perfsprint
+    - prealloc
+    - wastedassign
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - mirror
+    - exptostd
+    - predeclared
+    - goprintffuncname
+    - godot
+    - nakedret
+    - dogsled
+    - iface
+    - interfacebloat
+    # Security
+    - gosec
+    - bidichk
+    - asciicheck
+    # Tests
+    - testpackage
+    - thelper
+    - tparallel
+    - paralleltest
+    - usetesting
+    # Logging and HTTP
+    - sloglint
+    - canonicalheader
+    # Strict
+    - gochecknoglobals
+    - err113
+    - gocritic
+
+  settings:
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+
+    cyclop:
+      max-complexity: 12
+
+    gocognit:
+      min-complexity: 20
+
+    funlen:
+      lines: 80
+      statements: 40
+      ignore-comments: true
+
+    nestif:
+      min-complexity: 4
+
+    maintidx:
+      under: 20
+
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+
+    forbidigo:
+      forbid:
+        - pattern: ^fmt\.Print(f|ln)?$
+          msg: write to an explicit io.Writer or use log/slog
+        - pattern: ^print(ln)?$
+          msg: use log/slog
+
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+
+    dupl:
+      threshold: 150
+
+    gosec:
+      severity: medium
+      confidence: medium
+
+    sloglint:
+      static-msg: true
+      key-naming-case: snake
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+
+    depguard:
+      rules:
+        banned-modules:
+          list-mode: lax
+          files:
+            - $all
+          deny:
+            # Exact root package plus subpackages, so github.com/aws/aws-sdk-go-v2 stays allowed.
+            - pkg: github.com/aws/aws-sdk-go$
+              desc: AWS SDK v1 is end-of-life; use github.com/aws/aws-sdk-go-v2
+            - pkg: github.com/aws/aws-sdk-go/
+              desc: AWS SDK v1 is end-of-life; use github.com/aws/aws-sdk-go-v2
+            - pkg: github.com/minio/minio-go
+              desc: use github.com/aws/aws-sdk-go-v2 for S3 access
+            - pkg: github.com/stretchr/testify
+              desc: use the standard library testing package
+        internal-layering:
+          list-mode: lax
+          files:
+            - '**/internal/**'
+          deny:
+            - pkg: github.com/the-inconvenience-store/nx-remote-cache/cmd
+              desc: internal packages must not depend on cmd
+
+    revive:
+      rules:
+        - name: file-length-limit
+          arguments:
+            - max: 500
+              skipComments: true
+              skipBlankLines: true
+        - name: max-control-nesting
+          arguments:
+            - 4
+        - name: argument-limit
+          arguments:
+            - 5
+        - name: filename-format
+          arguments:
+            - ^[a-z0-9_]+\.go$
+        - name: package-directory-mismatch
+        - name: var-naming
+        - name: error-naming
+        - name: error-strings
+        - name: receiver-naming
+        - name: confusing-naming
+        - name: import-alias-naming
+        - name: package-comments
+        - name: early-return
+        - name: indent-error-flow
+        - name: superfluous-else
+        - name: unnecessary-stmt
+        - name: flag-parameter
+        - name: deep-exit
+        - name: unhandled-error
+          arguments:
+            - ^fmt\.Fprint(f|ln)?$
+        - name: unchecked-type-assertion
+        - name: use-any
+        - name: use-errors-new
+        - name: identical-branches
+        - name: unused-parameter
+        - name: unused-receiver
+        - name: bool-literal-in-expr
+        - name: constant-logical-expr
+        - name: range-val-in-closure
+        - name: modifies-parameter
+        - name: unexported-return
+
+  exclusions:
+    generated: strict
+    rules:
+      # Tests legitimately repeat literals, fixtures and table rows, and build
+      # ad-hoc sentinel errors; everything else stays linted.
+      - path: _test\.go$
+        linters:
+          - mnd
+          - funlen
+          - dupl
+          - goconst
+          - err113
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+    - gci
+    - golines
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/the-inconvenience-store/nx-remote-cache
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/the-inconvenience-store/nx-remote-cache)
+    golines:
+      max-len: 120
