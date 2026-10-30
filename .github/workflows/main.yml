@@ -108,6 +108,8 @@ jobs:
         env:
           METRICS_PORT: "0"
           S3_ENDPOINT_URL: http://127.0.0.1:3900
+          # dev/garage.toml's s3_region; SigV4 requests for another region get 400.
+          AWS_REGION: garage
           AWS_ACCESS_KEY_ID: GK11111111111111111111111111
           AWS_SECRET_ACCESS_KEY: "1111111111111111111111111111111111111111111111111111111111111111"
           NX_CACHE_OIDC_PROVIDERS: github
