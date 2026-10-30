@@ -251,10 +251,10 @@ try:
     record("Cache proof: stored bytes survive a rejected overwrite and are readable by the read-only consumer")
     counts = scrape("nx_cache_requests_total{")
     record("Metrics port 127.0.0.1:" + str(metrics_port) + " /metrics: " + "; ".join(counts))
-    if counts != ['nx_cache_requests_total{method="GET",outcome="hit"} 2',
-                  'nx_cache_requests_total{method="GET",outcome="miss"} 1',
-                  'nx_cache_requests_total{method="PUT",outcome="conflict"} 1',
-                  'nx_cache_requests_total{method="PUT",outcome="stored"} 1']:
+    if counts != ['nx_cache_requests_total{method="GET",outcome="hit",tier="static"} 2',
+                  'nx_cache_requests_total{method="GET",outcome="miss",tier="static"} 1',
+                  'nx_cache_requests_total{method="PUT",outcome="conflict",tier="static"} 1',
+                  'nx_cache_requests_total{method="PUT",outcome="stored",tier="static"} 1']:
         raise AssertionError("Request counts do not match the driven hits, miss, store and conflict")
     # One stored upload was read; the conflicting one was refused before its body.
     transferred = scrape("nx_cache_received_bytes_total ") + scrape("nx_cache_sent_bytes_total ")

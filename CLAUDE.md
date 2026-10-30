@@ -59,12 +59,26 @@ mise pins all tools and runs tasks (`mise run <task>`):
   `^[0-9A-Za-z_-]{1,128}$` (else 400); an upload whose Content-Length exceeds
   `NX_CACHE_MAX_ARTIFACT_BYTES` gets 403 before its body is read. Each cache
   request records one `outcome` (`requestlog.go`) on its request log line with
-  `hash`, `bytes`, `access`; never token text.
+  `hash`, `bytes`, `access`, `tier` (plus `repository`/`namespace` for
+  repository tokens); never token text.
+- Token exchange (ADR 0001; `exchange.go`, `github.go`, `issued.go`,
+  `tier.go`), on only with `Config.TokenExchange`: `POST /v1/token` verifies a
+  CI OIDC JWT (RS256 via go-oidc; unverified `iss`/`aud` pre-check; issuer keys
+  fetched lazily, at most every 30s) and returns an HMAC-signed `nxi1.` token
+  bound to one repository and the trusted tier or one namespace. The GitHub
+  `provider` maps by `event_name` (push → trusted if branch matches and
+  `ref_protected`, else `branch/…`; `pull_request` → `pr/N`; `merge_group` →
+  `queue/…`; else 403). Keys: static `<hash>`,
+  `trusted/<provider>/<repo_id>/<hash>`, `scoped/<provider>/<repo_id>/<ns>/<hash>`;
+  a `credential` lists read locations (scoped: trusted first) and one write
+  key. Issued tokens re-check repository admission on every request.
 - Metrics (`internal/server/metrics.go`): declare every collector once in
   `newMetrics`; `New` registers them all with `Config.Metrics` (nil →
   unregistered) only after it succeeds.
-  `nx_cache_requests_total{method,outcome}` counts cache requests;
+  `nx_cache_requests_total{method,outcome,tier}` counts cache requests;
+  `nx_cache_token_exchanges_total{provider,result}` counts exchanges;
   `nx_cache_stalled_transfers_total{method,side}` counts stopped transfers;
+  never label by hash, repository or namespace. Byte counters count bytes actually read/written
   never label by hash. Byte counters count bytes actually read/written
   (`receivedBody`, download copy), not declared lengths. S3 call durations come
   from one SDK Initialize middleware (`timeS3Calls`) labelled by operation name.
@@ -72,32 +86,42 @@ mise pins all tools and runs tasks (`mise run <task>`):
 
 ## Testing
 
-- Unit: package `server_test` exercises the handler against an httptest fake S3.
+- Unit: package `server_test` exercises the handler against an httptest fake S3
+  and a fake OIDC issuer (`internal/oidctest`).
 - `//go:build integration`: testcontainers-go via `internal/s3test`. Feature
   tests run on Garage (ignores `If-None-Match`) and versitygw (enforces it);
   the 20-round atomic-write race runs on versitygw only. A Garage-only test
   counts S3 connections through a TCP proxy across two 200-GET bursts.
 - `//go:build e2e` (`e2e/`): Nx 23.3 and 24.0 builds on both backends: miss +
-  upload, read-only remote hit, rebuild during storage outage.
+  upload, read-only remote hit, rebuild during storage outage; and issued
+  tokens through PR, trusted and repository read-only tiers.
 - `//go:build s3contract`: env-configured contract against real S3.
 
 ## Environment Variables
 
-Required: `NX_CACHE_ACCESS_TOKEN`. Optional: `NX_CACHE_READ_ONLY_TOKEN` (both
+Required: `NX_CACHE_ACCESS_TOKEN` (optional with token exchange on). Optional: `NX_CACHE_READ_ONLY_TOKEN` (both
 comma-separated token lists; empty item, duplicate or overlap → startup error),
 `PORT` (3000), `METRICS_PORT` (9090; 0 = off), `AWS_REGION` (us-east-1), `S3_BUCKET_NAME` (nx-cloud),
 `S3_ENDPOINT_URL`, `S3_FORCE_PATH_STYLE` (`true`|`false`; unset → path-style
 only with an endpoint), `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (both or
 neither; neither → default credential chain), `NX_CACHE_FAIL_OPEN` (true),
 `TLS_CERT_PATH` + `TLS_KEY_PATH` (both or neither), `NX_CACHE_MAX_ARTIFACT_BYTES`
-(0 = no limit), `NX_CACHE_STALL_TIMEOUT` (60s; Go duration > 0). See README for
-rules.
+(0 = no limit), `NX_CACHE_STALL_TIMEOUT` (60s; Go duration > 0). Token exchange
+(`cmd/nx-remote-cache/exchange.go`; any of these without the first → startup
+error): `NX_CACHE_OIDC_PROVIDERS` (`github`), `NX_CACHE_OIDC_AUDIENCE`,
+`NX_CACHE_ISSUED_TOKEN_KEYS` (base64, ≥32 bytes), `NX_CACHE_ISSUED_TOKEN_TTL`
+(6h; ≤120h), `NX_CACHE_GITHUB_ISSUER`, `NX_CACHE_GITHUB_OWNER_IDS` /
+`NX_CACHE_GITHUB_REPOSITORY_IDS` (numeric), `NX_CACHE_GITHUB_TRUSTED_BRANCHES`
+(main), `NX_CACHE_GITHUB_READ_ONLY_TOKENS` (`<repo_id>:<token>`). See README
+for rules.
 
 ## CI
 
 `.github/workflows/main.yml` runs on pushes and PRs to `main`, GitHub releases,
 and manual dispatch. Jobs (via jdx/mise-action): check, integration, e2e, cog
-check on PR commits, helm lint, then (not on PRs) a multi-arch distroless image
+check on PR commits, helm lint, a live token exchange (push and PR only:
+the server in the job plus `actions/token`, the composite action users pin),
+then (not on PRs) a multi-arch distroless image
 push to GHCR tagged `main` and `sha-<short>`. A published `vX.Y.Z` release also
 tags the image `X.Y.Z`, `X.Y`, `X`, `latest` and pushes the chart at that
 version. Dependabot updates Go modules, the Dockerfile and actions weekly.

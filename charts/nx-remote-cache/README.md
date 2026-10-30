@@ -29,8 +29,10 @@ Reference an existing Secret via `secrets.existingSecret`. Keys:
 
 | Key | Required | Env var |
 | --- | --- | --- |
-| `nx-cache-access-token` | yes | `NX_CACHE_ACCESS_TOKEN` (read/write) |
+| `nx-cache-access-token` | yes, unless token exchange is on | `NX_CACHE_ACCESS_TOKEN` (read/write) |
 | `nx-cache-read-only-token` | no | `NX_CACHE_READ_ONLY_TOKEN` (download only) |
+| `nx-cache-issued-token-keys` | with token exchange | `NX_CACHE_ISSUED_TOKEN_KEYS` |
+| `nx-cache-github-read-only-tokens` | no | `NX_CACHE_GITHUB_READ_ONLY_TOKENS` |
 | `aws-access-key-id` | no (both or neither) | `AWS_ACCESS_KEY_ID` |
 | `aws-secret-access-key` | no (both or neither) | `AWS_SECRET_ACCESS_KEY` |
 
@@ -56,6 +58,30 @@ contain no whitespace, and differ from `nx-cache-access-token`. The access token
 keeps read/write permission; the read-only token permits GET and gets 403 on
 PUT. Give PR jobs only the read-only token (or none if they must not read cached
 outputs).
+
+## Per-PR and multi-repository caching
+
+Set `config.tokenExchange.providers: github` to let GitHub Actions jobs
+exchange their OIDC token for a cache token bound to one repository and one
+tier (see the
+[project README](https://github.com/the-inconvenience-store/nx-remote-cache#per-pr-and-multi-repository-caching)).
+The static access token becomes optional, and every replica must share the
+same `secrets.issuedTokenKeys`.
+
+```yaml
+config:
+  tokenExchange:
+    providers: github
+    audience: https://nx-cache.example.com
+    github:
+      ownerIds: "1001"            # numeric IDs, comma-separated
+      trustedBranches: "main,release/*"
+secrets:
+  issuedTokenKeys: <openssl rand -base64 32>
+  githubReadOnlyTokens: "2002:<developer token>"
+```
+
+Quote numeric IDs in values files so YAML keeps them as strings.
 
 ## Rotating tokens
 
@@ -171,9 +197,18 @@ helm install nx-cache oci://ghcr.io/the-inconvenience-store/charts/nx-remote-cac
 | `config.s3.bucketName` | `nx-cloud` | `S3_BUCKET_NAME` |
 | `config.s3.endpointUrl` | `""` | `S3_ENDPOINT_URL`; omitted when empty (AWS S3) |
 | `config.s3.forcePathStyle` | `""` | `S3_FORCE_PATH_STYLE` (`"true"` or `"false"`); omitted when empty |
+| `config.tokenExchange.providers` | `""` | `NX_CACHE_OIDC_PROVIDERS`; `github` turns token exchange on; empty renders none of the token exchange settings |
+| `config.tokenExchange.audience` | `""` | `NX_CACHE_OIDC_AUDIENCE`; required with token exchange |
+| `config.tokenExchange.issuedTokenTTL` | `""` | `NX_CACHE_ISSUED_TOKEN_TTL`; empty keeps `6h` |
+| `config.tokenExchange.github.issuer` | `""` | `NX_CACHE_GITHUB_ISSUER`; empty keeps github.com |
+| `config.tokenExchange.github.ownerIds` | `""` | `NX_CACHE_GITHUB_OWNER_IDS` |
+| `config.tokenExchange.github.repositoryIds` | `""` | `NX_CACHE_GITHUB_REPOSITORY_IDS` |
+| `config.tokenExchange.github.trustedBranches` | `""` | `NX_CACHE_GITHUB_TRUSTED_BRANCHES`; empty keeps `main` |
 | `secrets.existingSecret` | `""` | If set, skip Secret creation and use this one |
-| `secrets.nxCacheAccessToken` | `""` | Required if `existingSecret` is empty |
+| `secrets.nxCacheAccessToken` | `""` | Required if `existingSecret` is empty and token exchange is off |
 | `secrets.nxCacheReadOnlyToken` | `""` | Optional download-only token |
+| `secrets.issuedTokenKeys` | `""` | Required with token exchange if `existingSecret` is empty |
+| `secrets.githubReadOnlyTokens` | `""` | Optional `<repository_id>:<token>` pairs |
 | `secrets.awsAccessKeyId` | `""` | Optional; set both AWS keys or neither |
 | `secrets.awsSecretAccessKey` | `""` | Optional; set both AWS keys or neither |
 | `tls.enabled` | `false` | Serve over HTTPS using a mounted cert/key |

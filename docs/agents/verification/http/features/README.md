@@ -9,6 +9,7 @@
 | [Secure startup and shutdown](startup.md) | Reject missing credentials, serve trusted HTTPS, drain on termination | Direct driver, TLS flag |
 | [Prometheus metrics](metrics.md) | Scrape request counts by outcome from a separate, optional port | Direct driver |
 | [Nx consumer builds](nx-consumer.md) | Real builds upload, restore remotely, and rebuild through storage outages | Existing Nx harness |
+| [Repository tiers](tiers.md) | PRs reuse their own results without poisoning trusted ones; repositories stay apart | Existing Nx harness, CI job |
 
 Conditional-write concurrency and streaming boundary cases have additional
 existing backend harnesses listed in the cache feature. Image, Helm, external
