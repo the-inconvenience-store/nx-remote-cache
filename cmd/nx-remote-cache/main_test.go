@@ -244,7 +244,7 @@ func TestServeExposesMetricsOnMetricsListener(t *testing.T) {
 		t.Fatalf("cache GET: status %d, want 404", status)
 	}
 	status, body := fetch(t, http.DefaultClient, newGet(t, "http://localhost:"+strconv.Itoa(metricsPort)+"/metrics"))
-	want := `nx_cache_requests_total{method="GET",outcome="degraded"} 1`
+	want := `nx_cache_requests_total{method="GET",outcome="degraded",tier="static"} 1`
 	if status != http.StatusOK || !strings.Contains(body, want) {
 		t.Fatalf("metrics: %d, want 200 containing %q:\n%s", status, want, body)
 	}

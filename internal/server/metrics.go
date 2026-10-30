@@ -33,8 +33,8 @@ func newMetrics() *metrics {
 	m := &metrics{
 		requests: factory.NewCounterVec(prometheus.CounterOpts{
 			Name: "nx_cache_requests_total",
-			Help: "Cache requests by HTTP method and outcome.",
-		}, []string{"method", "outcome"}),
+			Help: "Cache requests by HTTP method, outcome and tier.",
+		}, []string{"method", "outcome", "tier"}),
 		received: factory.NewCounter(prometheus.CounterOpts{
 			Name: "nx_cache_received_bytes_total",
 			Help: "Artifact bytes read from upload request bodies.",
@@ -93,15 +93,15 @@ func (*collectorList) Unregister(prometheus.Collector) bool {
 	return false
 }
 
-// countRequests counts each cache request by method and outcome once it ends,
-// including a download aborted mid-stream. It must run inside logRequests,
-// which attaches the request record.
+// countRequests counts each cache request by method, outcome and tier once it
+// ends, including a download aborted mid-stream. It must run inside
+// logRequests, which attaches the request record.
 func (h *handler) countRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		req := cacheRequestFrom(r.Context())
 		defer func() {
 			if req.outcome != "" {
-				h.metrics.requests.WithLabelValues(r.Method, string(req.outcome)).Inc()
+				h.metrics.requests.WithLabelValues(r.Method, string(req.outcome), string(req.tier)).Inc()
 			}
 		}()
 		next.ServeHTTP(w, r)
