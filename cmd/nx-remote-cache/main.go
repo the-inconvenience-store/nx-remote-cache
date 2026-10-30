@@ -113,7 +113,15 @@ func loadSettings(lookup lookupFunc) (settings, error) {
 	if err != nil {
 		return settings{}, err
 	}
-	access, _ := lookup("NX_CACHE_ACCESS_TOKEN")
+	exchange, err := loadTokenExchange(lookup)
+	if err != nil {
+		return settings{}, err
+	}
+	// With token exchange on, static access tokens are optional.
+	var accessTokens []string
+	if access, _ := lookup("NX_CACHE_ACCESS_TOKEN"); exchange == nil || access != "" {
+		accessTokens = splitTokens(access)
+	}
 	var readOnlyTokens []string
 	if readOnly, ok := lookup("NX_CACHE_READ_ONLY_TOKEN"); ok {
 		readOnlyTokens = splitTokens(readOnly)
@@ -126,7 +134,7 @@ func loadSettings(lookup lookupFunc) (settings, error) {
 		metricsPort: metricsPort,
 		tls:         tlsConfig,
 		server: server.Config{
-			AccessTokens:    splitTokens(access),
+			AccessTokens:    accessTokens,
 			ReadOnlyTokens:  readOnlyTokens,
 			Bucket:          valueOr(lookup, "S3_BUCKET_NAME", "nx-cloud"),
 			Region:          valueOr(lookup, "AWS_REGION", "us-east-1"),
@@ -137,6 +145,7 @@ func loadSettings(lookup lookupFunc) (settings, error) {
 			FailOpen:        failOpen,
 			MaxArtifactSize: maxArtifactSize,
 			StallTimeout:    stallTimeout,
+			TokenExchange:   exchange,
 		},
 	}, nil
 }
