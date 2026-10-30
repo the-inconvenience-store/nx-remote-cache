@@ -78,8 +78,8 @@ mise pins all tools and runs tasks (`mise run <task>`):
   `nx_cache_requests_total{method,outcome,tier}` counts cache requests;
   `nx_cache_token_exchanges_total{provider,result}` counts exchanges;
   `nx_cache_stalled_transfers_total{method,side}` counts stopped transfers;
-  never label by hash, repository or namespace. Byte counters count bytes actually read/written
-  never label by hash. Byte counters count bytes actually read/written
+  never label by hash, repository or namespace. Byte counters count bytes
+  actually read/written
   (`receivedBody`, download copy), not declared lengths. S3 call durations come
   from one SDK Initialize middleware (`timeS3Calls`) labelled by operation name.
 - `internal` must not import `cmd`.
