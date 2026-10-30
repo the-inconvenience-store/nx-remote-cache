@@ -78,17 +78,58 @@ spec:
             {{- end }}
             - name: NX_CACHE_STALL_TIMEOUT
               value: {{ .Values.config.stallTimeout | quote }}
+            {{- $exchange := .Values.config.tokenExchange }}
             - name: NX_CACHE_ACCESS_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "nx-remote-cache.secretName" . }}
                   key: nx-cache-access-token
+                  {{- if $exchange.providers }}
+                  optional: true
+                  {{- end }}
             - name: NX_CACHE_READ_ONLY_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "nx-remote-cache.secretName" . }}
                   key: nx-cache-read-only-token
                   optional: true
+            {{- if $exchange.providers }}
+            - name: NX_CACHE_OIDC_PROVIDERS
+              value: {{ $exchange.providers | quote }}
+            - name: NX_CACHE_OIDC_AUDIENCE
+              value: {{ required "config.tokenExchange.audience is required when token exchange is on" $exchange.audience | quote }}
+            {{- with $exchange.issuedTokenTTL }}
+            - name: NX_CACHE_ISSUED_TOKEN_TTL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $exchange.github.issuer }}
+            - name: NX_CACHE_GITHUB_ISSUER
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $exchange.github.ownerIds }}
+            - name: NX_CACHE_GITHUB_OWNER_IDS
+              value: {{ . | toString | quote }}
+            {{- end }}
+            {{- with $exchange.github.repositoryIds }}
+            - name: NX_CACHE_GITHUB_REPOSITORY_IDS
+              value: {{ . | toString | quote }}
+            {{- end }}
+            {{- with $exchange.github.trustedBranches }}
+            - name: NX_CACHE_GITHUB_TRUSTED_BRANCHES
+              value: {{ . | quote }}
+            {{- end }}
+            - name: NX_CACHE_ISSUED_TOKEN_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nx-remote-cache.secretName" . }}
+                  key: nx-cache-issued-token-keys
+            - name: NX_CACHE_GITHUB_READ_ONLY_TOKENS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nx-remote-cache.secretName" . }}
+                  key: nx-cache-github-read-only-tokens
+                  optional: true
+            {{- end }}
             - name: AWS_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
