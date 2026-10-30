@@ -1,0 +1,80 @@
+name: nx-remote-cache token
+description: >-
+  Exchange this job's GitHub Actions OIDC token for an nx-remote-cache token
+  and export NX_SELF_HOSTED_REMOTE_CACHE_SERVER and
+  NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN for later steps. The job needs
+  `permissions: id-token: write`.
+inputs:
+  server-url:
+    description: Base URL of the nx-remote-cache server, e.g. https://nx-cache.example.com
+    required: true
+  audience:
+    description: The server's NX_CACHE_OIDC_AUDIENCE.
+    required: true
+outputs:
+  tier:
+    description: >-
+      "trusted" or "scoped" when a token was issued; empty when the remote
+      cache stays off.
+    value: ${{ steps.token.outputs.tier }}
+  namespace:
+    description: The scoped namespace (e.g. pr/12); empty for the trusted tier.
+    value: ${{ steps.token.outputs.namespace }}
+runs:
+  using: composite
+  steps:
+    - id: token
+      shell: bash
+      env:
+        SERVER_URL: ${{ inputs.server-url }}
+        AUDIENCE: ${{ inputs.audience }}
+      run: |
+        set -uo pipefail
+        server="${SERVER_URL%/}"
+        off() {
+          echo "::warning title=nx-remote-cache::$1; the remote cache stays off for this job."
+          exit 0
+        }
+
+        # Fork pull requests, and jobs without id-token: write, get no OIDC token.
+        if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+          off "No GitHub OIDC token is available (fork pull request, or the job lacks permissions: id-token: write)"
+        fi
+        oidc=$(curl -fsS -G --data-urlencode "audience=${AUDIENCE}" \
+          -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}") ||
+          off "Could not get a GitHub OIDC token"
+        jwt=$(printf '%s' "$oidc" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
+        [ -n "$jwt" ] || off "GitHub returned no OIDC token"
+        echo "::add-mask::${jwt}"
+
+        body=$(mktemp)
+        status=$(curl -sS -o "$body" -w '%{http_code}' -X POST \
+          -H "Authorization: Bearer ${jwt}" "${server}/v1/token") ||
+          off "Could not reach ${server}"
+        case "$status" in
+          200) ;;
+          401 | 403)
+            echo "::error title=nx-remote-cache::Token exchange refused (${status}): $(cat "$body")"
+            exit 1
+            ;;
+          *) off "Token exchange failed (${status}): $(cat "$body")" ;;
+        esac
+        token=$(cat "$body")
+        echo "::add-mask::${token}"
+        {
+          echo "NX_SELF_HOSTED_REMOTE_CACHE_SERVER=${server}"
+          echo "NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN=${token}"
+        } >> "$GITHUB_ENV"
+
+        # The token's payload is signed, not secret: report what it grants.
+        payload=$(printf '%s' "$token" | cut -d. -f2 | tr '_-' '/+')
+        while [ $(( ${#payload} % 4 )) -ne 0 ]; do payload="${payload}="; done
+        namespace=$(printf '%s' "$payload" | base64 -d 2>/dev/null | sed -n 's/.*"n":"\([^"]*\)".*/\1/p')
+        if [ -n "$namespace" ]; then
+          echo "tier=scoped" >> "$GITHUB_OUTPUT"
+          echo "Issued a cache token for namespace ${namespace}"
+        else
+          echo "tier=trusted" >> "$GITHUB_OUTPUT"
+          echo "Issued a cache token for the trusted tier"
+        fi
+        echo "namespace=${namespace}" >> "$GITHUB_OUTPUT"
