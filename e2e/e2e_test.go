@@ -195,11 +195,19 @@ func createWorkspace(t *testing.T, version string) string {
 	cmd.Dir = dir
 	// Parallel npx runs sharing one cache race on its install directory
 	// (ENOTEMPTY, half-installed packages), so each workspace gets its own.
-	cmd.Env = append(withoutAIAgentEnv(os.Environ()), "npm_config_cache="+t.TempDir())
+	cmd.Env = append(withoutAIAgentEnv(os.Environ()), "npm_config_cache="+t.TempDir(), nativeFileCache(dir))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("create workspace: %v\n%s", err, out)
 	}
 	return filepath.Join(dir, workspaceName)
+}
+
+// nativeFileCache gives each workspace its own copy of Nx's native binary.
+// Nx copies it into a shared temp directory before loading it; parallel Nx
+// processes race on that copy and fail with "WorkspaceContext is not a
+// constructor".
+func nativeFileCache(workspaceParent string) string {
+	return "NX_NATIVE_FILE_CACHE_DIRECTORY=" + filepath.Join(workspaceParent, "nx-native-file-cache")
 }
 
 // withoutAIAgentEnv drops variables create-nx-workspace treats as "running under
@@ -230,7 +238,7 @@ func nxBuild(t *testing.T, workspace, serverURL, token string) string {
 		cmd.Env = append(os.Environ(),
 			"NX_SELF_HOSTED_REMOTE_CACHE_SERVER="+serverURL,
 			"NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN="+token,
-			"NX_DAEMON=false", "NX_NO_CLOUD=true", "NX_TUI=false",
+			"NX_DAEMON=false", "NX_NO_CLOUD=true", "NX_TUI=false", nativeFileCache(filepath.Dir(workspace)),
 		)
 		out, err := cmd.CombinedOutput()
 		if err != nil {

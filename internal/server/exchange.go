@@ -326,7 +326,8 @@ var (
 
 // issuerKeys caches one issuer's signing keys. Keys are fetched lazily, so
 // startup and readiness never depend on the issuer, and at most once per
-// keyRefreshInterval.
+// keyRefreshInterval. One fetch runs at a time, outside the lock, so cached
+// keys stay available while it runs.
 type issuerKeys struct {
 	issuer string
 	client *http.Client
@@ -335,34 +336,55 @@ type issuerKeys struct {
 	keys      map[string]*rsa.PublicKey
 	attempted time.Time
 	fetchErr  error
+	// fetching is closed when the running fetch ends; nil when none runs.
+	fetching chan struct{}
 }
 
 // key returns the RSA key with ID kid, fetching the issuer's keys when kid is
 // unknown and the last fetch is old enough. It returns errIssuerUnavailable
-// when the issuer cannot be reached.
+// when the issuer cannot be reached, and stops waiting for another request's
+// fetch when r is cancelled.
 func (k *issuerKeys) key(r *http.Request, kid string) (*rsa.PublicKey, error) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	if key, ok := k.keys[kid]; ok && kid != "" {
-		return key, nil
-	}
-	if !k.attempted.IsZero() && time.Since(k.attempted) < keyRefreshInterval {
-		if k.fetchErr != nil {
-			return nil, k.fetchErr
+	for {
+		k.mu.Lock()
+		if key, ok := k.keys[kid]; ok && kid != "" {
+			k.mu.Unlock()
+			return key, nil
 		}
-		return nil, errUnknownKey
+		if running := k.fetching; running != nil {
+			k.mu.Unlock()
+			select {
+			case <-running:
+				continue
+			case <-r.Context().Done():
+				return nil, fmt.Errorf("wait for issuer keys: %w", r.Context().Err())
+			}
+		}
+		if !k.attempted.IsZero() && time.Since(k.attempted) < keyRefreshInterval {
+			err := k.fetchErr
+			k.mu.Unlock()
+			if err != nil {
+				return nil, err
+			}
+			return nil, errUnknownKey
+		}
+		k.attempted = time.Now()
+		done := make(chan struct{})
+		k.fetching = done
+		k.mu.Unlock()
+
+		keys, err := k.fetch(r)
+
+		k.mu.Lock()
+		if err != nil {
+			k.fetchErr = fmt.Errorf("%w: %w", errIssuerUnavailable, err)
+		} else {
+			k.keys, k.fetchErr = keys, nil
+		}
+		k.fetching = nil
+		close(done)
+		k.mu.Unlock()
 	}
-	k.attempted = time.Now()
-	keys, err := k.fetch(r)
-	if err != nil {
-		k.fetchErr = fmt.Errorf("%w: %w", errIssuerUnavailable, err)
-		return nil, k.fetchErr
-	}
-	k.keys, k.fetchErr = keys, nil
-	if key, ok := k.keys[kid]; ok && kid != "" {
-		return key, nil
-	}
-	return nil, errUnknownKey
 }
 
 func (k *issuerKeys) fetch(r *http.Request) (map[string]*rsa.PublicKey, error) {

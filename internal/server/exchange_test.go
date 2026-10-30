@@ -2,8 +2,10 @@ package server_test
 
 import (
 	"bytes"
+	"context"
 	"maps"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -421,5 +423,40 @@ func TestIssuedUploadRecordsRunMetadataAndLog(t *testing.T) {
 	})
 	if strings.Contains(logs.String(), token) {
 		t.Error("logs contain the issued token")
+	}
+}
+
+// A request waiting for an issuer key fetch another exchange started must stop
+// waiting when its client goes away, instead of queueing behind the fetch.
+func TestExchangeWaitingOnAKeyFetchHonoursCancellation(t *testing.T) {
+	t.Parallel()
+	issuer := newFakeIssuer(t)
+	arrived, release := make(chan struct{}), make(chan struct{})
+	issuer.BeforeJWKS = func() {
+		arrived <- struct{}{}
+		<-release
+	}
+	h := newHandler(t, newFakeS3(t).URL, options{configure: withExchange(issuer)})
+	first := make(chan int, 1)
+	go func() {
+		status, _ := exchange(t, h, issuer.Sign(t, pullRequest(1)))
+		first <- status
+	}()
+	<-arrived
+
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/v1/token", nil)
+	req.Header.Set("Authorization", "Bearer "+issuer.Sign(t, pullRequest(2)))
+	start := time.Now()
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	waited := time.Since(start)
+	close(release)
+
+	if waited > 2*time.Second {
+		t.Errorf("cancelled exchange waited %s for another exchange's key fetch", waited)
+	}
+	if status := <-first; status != http.StatusOK {
+		t.Errorf("exchange that started the fetch: status %d, want 200", status)
 	}
 }
