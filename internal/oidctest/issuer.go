@@ -23,15 +23,17 @@ const (
 )
 
 // Issuer is a running fake issuer. Down makes its endpoints fail; Fetches
-// counts JWKS requests.
+// counts JWKS requests; BeforeJWKS, when set before the first request, runs
+// at the start of each JWKS request, so a test can hold the fetch open.
 type Issuer struct {
 	URL string
 	Key *rsa.PrivateKey
 	KID string
 	// Defaults are claims added to every token before the caller's claims.
-	Defaults map[string]any
-	Down     atomic.Bool
-	Fetches  atomic.Int32
+	Defaults   map[string]any
+	BeforeJWKS func()
+	Down       atomic.Bool
+	Fetches    atomic.Int32
 }
 
 // NewIssuer starts an issuer that stops when the test ends.
@@ -51,6 +53,9 @@ func NewIssuer(tb testing.TB) *Issuer {
 		_ = json.NewEncoder(w).Encode(map[string]string{"issuer": issuer.URL, "jwks_uri": issuer.URL + "/jwks"})
 	})
 	mux.HandleFunc("GET /jwks", func(w http.ResponseWriter, _ *http.Request) {
+		if issuer.BeforeJWKS != nil {
+			issuer.BeforeJWKS()
+		}
 		issuer.Fetches.Add(1)
 		_ = json.NewEncoder(w).Encode(jose.JSONWebKeySet{Keys: []jose.JSONWebKey{
 			{Key: &issuer.Key.PublicKey, KeyID: issuer.KID, Algorithm: string(jose.RS256), Use: "sig"},
