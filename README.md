@@ -15,6 +15,9 @@ lives in [`docs/nx-remote-cache.openapi.json`](docs/nx-remote-cache.openapi.json
 - Conditional writes (`If-None-Match: *`) where the storage supports them, to
   stop concurrent overwrites.
 - Optional read-only token for untrusted CI jobs.
+- Optional per-PR caching and per-repository isolation: GitHub Actions jobs
+  exchange their OIDC token for a cache token bound to one repository and one
+  tier, so PR builds reuse their own results without poisoning trusted ones.
 - Graceful degradation during storage outages so Nx keeps building.
 - Stalled S3 transfers stop after a configurable time without bytes, so they
   cannot hang the Nx run.
@@ -31,8 +34,8 @@ Invalid configuration prints an error to stderr and exits with status 1. See
 
 | Variable | Required | Default | Rules |
 | --- | --- | --- | --- |
-| `NX_CACHE_ACCESS_TOKEN` | yes | — | Trusted read/write tokens: a comma-separated list. Each token is nonempty, without whitespace. |
-| `NX_CACHE_READ_ONLY_TOKEN` | no | unset | Download-only tokens: a comma-separated list. If set (even empty), each token must be nonempty, contain no whitespace, and not appear in `NX_CACHE_ACCESS_TOKEN`. |
+| `NX_CACHE_ACCESS_TOKEN` | yes, unless token exchange is on | — | Trusted read/write tokens for the static tier: a comma-separated list. Each token is nonempty, without whitespace. With token exchange on, unset or empty means none. |
+| `NX_CACHE_READ_ONLY_TOKEN` | no | unset | Download-only tokens for the static tier: a comma-separated list. If set (even empty), each token must be nonempty, contain no whitespace, and not appear in `NX_CACHE_ACCESS_TOKEN`. |
 | `PORT` | no | `3000` | Listen port. |
 | `METRICS_PORT` | no | `9090` | Port for Prometheus `/metrics` (plain HTTP); `0` turns metrics off. An integer from 0 to 65535; anything else, including empty, is an error. See [Metrics](#metrics). |
 | `AWS_REGION` | no | `us-east-1` | |
@@ -47,17 +50,36 @@ Invalid configuration prints an error to stderr and exits with status 1. See
 | `TLS_CERT_PATH` | no | unset | PEM certificate. Set both TLS paths or neither; both → HTTPS. |
 | `TLS_KEY_PATH` | no | unset | PEM private key. |
 
+Token exchange variables ([Per-PR and multi-repository caching](#per-pr-and-multi-repository-caching)).
+Any of them set while `NX_CACHE_OIDC_PROVIDERS` is unset or empty is an error.
+
+| Variable | Required | Default | Rules |
+| --- | --- | --- | --- |
+| `NX_CACHE_OIDC_PROVIDERS` | no | unset (off) | `github` turns token exchange on. |
+| `NX_CACHE_OIDC_AUDIENCE` | with exchange | — | The `aud` CI tokens must carry; for example the server URL. |
+| `NX_CACHE_ISSUED_TOKEN_KEYS` | with exchange | — | Comma-separated standard base64 keys of at least 32 bytes (`openssl rand -base64 32`), identical on every replica. The first signs issued tokens; all verify them. |
+| `NX_CACHE_ISSUED_TOKEN_TTL` | no | `6h` | How long an issued token works; a Go duration greater than zero and at most `120h`. |
+| `NX_CACHE_GITHUB_ISSUER` | no | `https://token.actions.githubusercontent.com` | Actions OIDC issuer; set it for GitHub Enterprise Server (`https://HOSTNAME/_services/token`) or GHE.com (`https://token.actions.SUBDOMAIN.ghe.com`). One issuer per deployment. |
+| `NX_CACHE_GITHUB_OWNER_IDS` | one of these two | unset | Comma-separated numeric owner (user or organisation) IDs; every repository of these owners may use the cache. |
+| `NX_CACHE_GITHUB_REPOSITORY_IDS` | one of these two | unset | Comma-separated numeric repository IDs. Names are never accepted: they can be renamed and reused. |
+| `NX_CACHE_GITHUB_TRUSTED_BRANCHES` | no | `main` | Comma-separated [`path.Match`](https://pkg.go.dev/path#Match) patterns (`*` does not match `/`); a bare `*` is an error. |
+| `NX_CACHE_GITHUB_READ_ONLY_TOKENS` | no | unset | Comma-separated `<repository_id>:<token>` pairs; each token reads that repository's trusted tier. Tokens must not repeat or appear in another token list. |
+
 ## API
 
 | Route | Auth | Responses |
 | --- | --- | --- |
 | `GET /health` | none | 200 `OK` (process liveness; never touches storage) |
 | `GET /ready` | none | 200 `OK`, or 503 `Storage unavailable` when `HeadBucket` fails within 2s |
-| `PUT /v1/cache/{hash}` | access token | 200, 400, 401, 403, 409, 411, 500, 503 |
-| `GET /v1/cache/{hash}` | either token | 200 (`application/octet-stream`), 400, 401, 404, 503 |
+| `PUT /v1/cache/{hash}` | write token | 200, 400, 401, 403, 409, 411, 500, 503 |
+| `GET /v1/cache/{hash}` | any token | 200 (`application/octet-stream`), 400, 401, 404, 503 |
+| `POST /v1/token` | CI OIDC token | 200 (the issued token as `text/plain`), 401, 403, 503; only with token exchange on |
 
 Cache routes require `Authorization: Bearer <token>`; anything else returns 401
-`Missing or invalid authentication token`. A hash must match
+`Missing or invalid authentication token`. An issued token that expired returns
+401 `Cache token expired; exchange a new CI token for it`, and one whose
+repository is no longer admitted returns 401 `This repository is not allowed to
+use this cache`; Nx shows these messages. A hash must match
 `^[0-9A-Za-z_-]{1,128}$`; any other hash returns 400 `Invalid hash` without a
 storage request. Response bodies are plain text.
 
@@ -136,9 +158,82 @@ Each stored artifact includes S3 metadata `nx-writer` (the first 12 hexadecimal
 characters of the SHA-256 hash of the uploading bearer token) and
 `nx-uploaded-at` (the upload time in RFC 3339 UTC). The PUT request log records
 the same writer identifier; the token itself is never stored or logged.
+Uploads with an issued token also record `nx-repository`, `nx-namespace`,
+`nx-run-id` and `nx-actor`.
 
 For Helm, set `secrets.nxCacheReadOnlyToken`, or add the optional
 `nx-cache-read-only-token` key to the existing Secret.
+
+### Per-PR and multi-repository caching
+
+A read-only PR token stops cache poisoning, but PR builds then rebuild
+everything. With token exchange on (`NX_CACHE_OIDC_PROVIDERS=github`), each
+GitHub Actions job trades its OIDC token for an *issued token* bound to one
+repository and one tier; Nx uses it like any other token. The design and its
+rejected alternatives are in
+[ADR 0001](docs/adr/0001-per-repository-tiers-via-ci-oidc.md).
+
+| Tier | Storage key | Written by | Read by |
+| --- | --- | --- | --- |
+| Static | `<hash>` | `NX_CACHE_ACCESS_TOKEN` | static tokens |
+| Trusted | `trusted/github/<repository_id>/<hash>` | pushes to a protected trusted branch | every token of that repository |
+| Scoped | `scoped/github/<repository_id>/<namespace>/<hash>` | runs of that namespace | that namespace's tokens |
+
+The server picks the namespace from the verified token's `event_name`, never
+from the job's own settings:
+
+| Event | Grant |
+| --- | --- |
+| `push` to a trusted branch that GitHub reports protected (`ref_protected`) | trusted tier |
+| `push` to any other branch, or to an unprotected trusted branch | `branch/<escaped branch>` (a warning is logged for the latter) |
+| `pull_request` (`refs/pull/<N>/merge`) | `pr/<N>` |
+| `merge_group` (`refs/heads/gh-readonly-queue/...`) | `queue/<escaped branch>` |
+| anything else, including `pull_request_target`, `workflow_run`, `issue_comment`, `workflow_dispatch`, tags | refused (403) |
+
+A scoped token reads its repository's trusted tier first, then its own
+namespace, and writes only its namespace. Repositories sharing the server never
+read each other's artifacts, and repository tiers never read the static tier, so
+turning token exchange on starts the trusted tier cold. Every request re-checks
+that the token's repository is still admitted; there is no other revocation:
+rotate `NX_CACHE_ISSUED_TOKEN_KEYS` to revoke every issued token. Startup and
+`/ready` never contact GitHub; while GitHub is unreachable, `POST /v1/token`
+returns 503 and issued tokens keep working.
+
+In each workflow, add the action from this repository, pinned to a release
+commit (only immutable `vX.Y.Z` tags are published), before any Nx step:
+
+```yaml
+permissions:
+  contents: read
+  id-token: write
+steps:
+  - uses: actions/checkout@v5
+  - uses: the-inconvenience-store/nx-remote-cache/actions/token@<release commit SHA> # vX.Y.Z
+    with:
+      server-url: https://nx-cache.example.com
+      audience: https://nx-cache.example.com # NX_CACHE_OIDC_AUDIENCE
+  - run: npx nx affected -t build
+```
+
+The action exports `NX_SELF_HOSTED_REMOTE_CACHE_SERVER` and a masked
+`NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN`, and outputs `tier` and
+`namespace`. Do not set those two variables yourself. Without an OIDC token
+(fork pull requests, or no `id-token: write`) or when the server is unreachable,
+it warns and leaves the remote cache off; a 401 or 403 from the server fails the
+step. Without the action, fetch the token from `ACTIONS_ID_TOKEN_REQUEST_URL`
+with `audience=<NX_CACHE_OIDC_AUDIENCE>`, `POST` it as a bearer token to
+`/v1/token`, mask the response body and export it.
+
+Trust rests on each repository's branch protection or rulesets for its trusted
+branches; a repository without them gets branch namespaces instead of trusted
+writes. Keep any static `NX_CACHE_ACCESS_TOKEN` out of reach of PR jobs (a
+GitHub environment restricted to protected branches, not a repository secret):
+same-repository PR jobs can read repository secrets. The default 6h token
+lifetime matches the GitHub-hosted job limit; raise `NX_CACHE_ISSUED_TOKEN_TTL`
+(up to `120h`) for longer self-hosted runner jobs, because an expired token
+fails the Nx run. Developers get a repository read-only token from
+`NX_CACHE_GITHUB_READ_ONLY_TOKENS`. Find numeric IDs with
+`gh api repos/OWNER/REPO --jq '.id, .owner.id'`.
 
 ### Rotating tokens
 
@@ -186,6 +281,21 @@ versions after 30 days
       "NoncurrentVersionExpiration": { "NoncurrentDays": 30 }
     }
   ]
+}
+```
+
+With token exchange on, scoped tiers (one per pull request, merge queue entry
+and branch) accumulate; expire them sooner with a second rule on the `scoped/`
+prefix. When rules overlap, S3 applies the shorter expiration, so `trusted/`
+and static artifacts keep the 90 days:
+
+```json
+{
+  "ID": "ExpireNxScopedTiers",
+  "Status": "Enabled",
+  "Filter": { "Prefix": "scoped/" },
+  "Expiration": { "Days": 14 },
+  "NoncurrentVersionExpiration": { "NoncurrentDays": 1 }
 }
 ```
 
@@ -380,8 +490,13 @@ Each request logs one `msg=request` line with `method`, `path`, `status`, and
 - `hash`: the requested hash.
 - `bytes`: the artifact size; the declared `Content-Length` of an upload, or the
   bytes sent for a download.
-- `access`: `rw` for the access token, `ro` for the read-only token; absent when
-  the token is missing or invalid.
+- `access`: `rw` for a token that can write, `ro` for a read-only one; absent
+  when the token is missing or invalid.
+- `tier`: `static`, `trusted` or `scoped`: the tier that served or stored the
+  artifact, otherwise the token's own tier; absent when the token is missing or
+  invalid.
+- `repository` and `namespace`: for repository tokens, `github/<repository_id>`
+  and the scoped namespace.
 - `outcome`: what happened to the request.
 
 | Outcome | Meaning |
@@ -390,7 +505,7 @@ Each request logs one `msg=request` line with `method`, `path`, `status`, and
 | `miss` | `GET` found no artifact (404). |
 | `stored` | `PUT` stored the artifact. |
 | `conflict` | `PUT` for a hash that already exists (409). |
-| `read-only` | `PUT` with the read-only token (403). |
+| `read-only` | `PUT` with a read-only token (403). |
 | `degraded` | Storage failed and the server answered a miss (404) or "not stored" (403); see [Cache outages](#cache-outages). |
 | `unauthorised` | Missing or invalid token (401). |
 | `bad-request` | The request is not valid: an invalid hash (400) or no `Content-Length` (411). |
@@ -409,12 +524,13 @@ port has no authentication and no TLS; keep it on the internal network.
 
 | Metric | Type | Labels | Meaning |
 | --- | --- | --- | --- |
-| `nx_cache_requests_total` | counter | `method`, `outcome` | Cache requests by HTTP method and [outcome](#request-log). |
+| `nx_cache_requests_total` | counter | `method`, `outcome`, `tier` | Cache requests by HTTP method, [outcome](#request-log) and tier (`static`, `trusted`, `scoped`; empty for a missing or invalid token). |
 | `nx_cache_received_bytes_total` | counter | — | Artifact bytes read from upload bodies; an aborted upload counts the bytes read before it stopped. |
 | `nx_cache_sent_bytes_total` | counter | — | Artifact bytes written to download responses; an interrupted download counts the bytes sent. |
 | `nx_cache_s3_request_duration_seconds` | histogram | `operation` | S3 API call duration (`HeadObject`, `PutObject`, `GetObject`, `HeadBucket`), including SDK retries. `PutObject` includes streaming the upload; `GetObject` ends when the response headers arrive, before the artifact streams. |
 | `nx_cache_unconditional_uploads_total` | counter | — | Uploads sent without `If-None-Match` because storage reported conditional writes unsupported; see [Upload compatibility](#upload-compatibility). Above 0, concurrent uploads of one hash can overwrite each other. |
 | `nx_cache_stalled_transfers_total` | counter | `method`, `side` | Transfers stopped by the [stall timeout](#stalled-transfers), by HTTP method and the side the server was waiting on: `storage` or `client`. |
+| `nx_cache_token_exchanges_total` | counter | `provider`, `result` | Token exchanges: `issued`, `refused` (403), `invalid` (401) or `unavailable` (503, issuer unreachable). `provider` is empty until a CI token's issuer is recognised. |
 
 The standard Go runtime (`go_*`) and process (`process_*`) metrics are also
 served.
@@ -433,7 +549,7 @@ all tasks.
 | `mise run lint` | golangci-lint, hadolint, actionlint, typos, helm lint |
 | `mise run test` | Unit tests (no Docker) |
 | `mise run test-integration` | Feature suite against Garage and versitygw, plus atomic-write races on versitygw (needs Docker) |
-| `mise run e2e` | Real Nx 23.3 builds against the server on Garage and versitygw (needs Docker and Node) |
+| `mise run e2e` | Real Nx 23.3 and 24.0 builds against the server on Garage and versitygw, with static and issued tokens (needs Docker and Node) |
 | `mise run test-s3` | Optional atomic-write contract against a real bucket |
 | `mise run audit` | govulncheck |
 | `mise run deadcode` | Report functions unreachable from main |
