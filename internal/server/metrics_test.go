@@ -262,7 +262,7 @@ func TestMetricsCountRequestsByTierAndExchangesByResult(t *testing.T) {
 	get(t, h, "p", pr)
 	get(t, h, "missing", pr)
 	get(t, h, "t", "wrong")
-	exchange(t, h, issuer.sign(t, map[string]any{"event_name": "pull_request_target", "ref": "refs/heads/main"}))
+	exchange(t, h, issuer.Sign(t, map[string]any{"event_name": "pull_request_target", "ref": "refs/heads/main"}))
 	exchange(t, h, "not-a-jwt")
 
 	want := `
