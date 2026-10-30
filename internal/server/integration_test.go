@@ -268,3 +268,34 @@ func TestConditionalWriteBackendKeepsRacingUploadsAtomic(t *testing.T) {
 		t.Fatalf("server stopped sending conditional PUTs:\n%s", logs.String())
 	}
 }
+
+// Escaped branch names put %, + and UTF-8 escapes into keys; every backend
+// must store and isolate them.
+func TestRepositoryTiersOnRealBackends(t *testing.T) {
+	t.Parallel()
+	eachBackend(t, func(t *testing.T, b *s3test.Backend) { //nolint:thelper // subtest body; keep failure lines
+		issuer := newFakeIssuer(t)
+		h := newHandler(t, b.Endpoint, options{configure: func(c *server.Config) {
+			withExchange(issuer)(c)
+			c.Bucket, c.Region = s3test.Bucket, b.Region
+			c.AccessKeyID, c.SecretAccessKey = b.AccessKeyID, b.SecretAccessKey
+		}})
+		branch := issue(t, h, issuer, push("feature/x y+ü", true))
+		pr := issue(t, h, issuer, pullRequest(1))
+		trusted := issue(t, h, issuer, push("main", true))
+
+		status, body := put(t, h, "b", branch, "branch artifact")
+		expect(t, status, body, http.StatusOK, "Successfully uploaded")
+		status, body = get(t, h, "b", branch)
+		expect(t, status, body, http.StatusOK, "branch artifact")
+		for _, other := range []string{pr, trusted} {
+			status, body = get(t, h, "b", other)
+			expect(t, status, body, http.StatusNotFound, "The record was not found")
+		}
+
+		status, body = put(t, h, "t", trusted, "trusted artifact")
+		expect(t, status, body, http.StatusOK, "Successfully uploaded")
+		status, body = get(t, h, "t", pr)
+		expect(t, status, body, http.StatusOK, "trusted artifact")
+	})
+}

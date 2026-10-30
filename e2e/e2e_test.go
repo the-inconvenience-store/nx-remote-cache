@@ -118,7 +118,9 @@ func buildServer(t *testing.T) string {
 	return binary
 }
 
-func startServer(t *testing.T, binary string, backend *s3test.Backend) (string, *syncBuffer) {
+// startServer runs the binary on backend with static tokens; extraEnv adds
+// or overrides variables.
+func startServer(t *testing.T, binary string, backend *s3test.Backend, extraEnv ...string) (string, *syncBuffer) {
 	t.Helper()
 	port := freePort(t)
 	logs := &syncBuffer{}
@@ -135,6 +137,7 @@ func startServer(t *testing.T, binary string, backend *s3test.Backend) (string, 
 		"NX_CACHE_ACCESS_TOKEN="+trustedToken,
 		"NX_CACHE_READ_ONLY_TOKEN="+readOnlyToken,
 	)
+	cmd.Env = append(cmd.Env, extraEnv...)
 	cmd.Stdout, cmd.Stderr = logs, logs
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start server: %v", err)

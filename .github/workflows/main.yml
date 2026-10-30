@@ -78,6 +78,90 @@ jobs:
         env:
           NX_VERSION: ${{ matrix.nx-version }}
         run: mise run e2e
+
+  token-exchange:
+    name: Live GitHub OIDC Token Exchange
+    # Only push and pull_request runs can get a cache token; other events are refused.
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      SERVER_URL: http://127.0.0.1:3000
+      AUDIENCE: nx-remote-cache-ci
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@v5
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ github.job }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-${{ runner.os }}-${{ github.job }}-
+      - name: Start Garage
+        run: docker compose up -d --wait
+      - name: Start the cache server with GitHub token exchange
+        env:
+          METRICS_PORT: "0"
+          S3_ENDPOINT_URL: http://127.0.0.1:3900
+          AWS_ACCESS_KEY_ID: GK11111111111111111111111111
+          AWS_SECRET_ACCESS_KEY: "1111111111111111111111111111111111111111111111111111111111111111"
+          NX_CACHE_OIDC_PROVIDERS: github
+          NX_CACHE_OIDC_AUDIENCE: ${{ env.AUDIENCE }}
+          NX_CACHE_GITHUB_REPOSITORY_IDS: ${{ github.repository_id }}
+        run: |
+          NX_CACHE_ISSUED_TOKEN_KEYS="$(openssl rand -base64 32)"
+          export NX_CACHE_ISSUED_TOKEN_KEYS
+          mise exec -- go build -o "$RUNNER_TEMP/nx-remote-cache" ./cmd/nx-remote-cache
+          nohup "$RUNNER_TEMP/nx-remote-cache" > "$RUNNER_TEMP/server.log" 2>&1 &
+          for _ in $(seq 50); do
+            curl -fsS "$SERVER_URL/health" && exit 0
+            sleep 0.2
+          done
+          cat "$RUNNER_TEMP/server.log"
+          exit 1
+      - id: token
+        uses: ./actions/token
+        with:
+          server-url: ${{ env.SERVER_URL }}
+          audience: ${{ env.AUDIENCE }}
+      - name: Check the granted tier and round-trip an artifact
+        env:
+          TIER: ${{ steps.token.outputs.tier }}
+          NAMESPACE: ${{ steps.token.outputs.namespace }}
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          FORK: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          echo "event=$EVENT tier=$TIER namespace=$NAMESPACE"
+          if [ "$FORK" = "true" ]; then
+            [ -z "$TIER" ] || { echo "fork pull request got a cache token"; exit 1; }
+            exit 0
+          fi
+          case "$EVENT" in
+            pull_request) want_tier=scoped want_namespace="pr/$PR_NUMBER" ;;
+            # main is a trusted branch; it is trusted only while GitHub reports it protected.
+            push) if [ "$TIER" = trusted ]; then want_tier=trusted want_namespace=""; else want_tier=scoped want_namespace=branch/main; fi ;;
+          esac
+          if [ "$TIER" != "$want_tier" ] || [ "$NAMESPACE" != "$want_namespace" ]; then
+            echo "want tier=$want_tier namespace=$want_namespace"
+            exit 1
+          fi
+          key="ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          printf 'artifact' > "$RUNNER_TEMP/artifact"
+          curl -fsS -X PUT --data-binary "@$RUNNER_TEMP/artifact" \
+            -H "Authorization: Bearer $NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN" \
+            "$NX_SELF_HOSTED_REMOTE_CACHE_SERVER/v1/cache/$key"
+          got=$(curl -fsS -H "Authorization: Bearer $NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN" \
+            "$NX_SELF_HOSTED_REMOTE_CACHE_SERVER/v1/cache/$key")
+          [ "$got" = artifact ] || { echo "downloaded '$got'"; exit 1; }
+      - name: Server log
+        if: always()
+        run: cat "$RUNNER_TEMP/server.log" || true
   commits:
     name: Conventional Commits
     if: github.event_name == 'pull_request'
