@@ -9,7 +9,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -31,6 +33,19 @@ var (
 	ErrAWSCredentials  = errors.New("AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set together")
 	ErrBucketNotConfig = errors.New("S3 bucket name must not be empty")
 	ErrStallTimeout    = errors.New("NX_CACHE_STALL_TIMEOUT must be a Go duration greater than zero, such as 60s")
+	ErrOIDCAudience    = errors.New("NX_CACHE_OIDC_AUDIENCE must not be empty when token exchange is on")
+	ErrIssuedTokenKeys = errors.New(
+		"NX_CACHE_ISSUED_TOKEN_KEYS must list at least one base64 key of 32 bytes or more")
+	ErrIssuedTokenTTL = errors.New(
+		"NX_CACHE_ISSUED_TOKEN_TTL must be a Go duration greater than zero and at most 120h")
+	ErrOIDCProvider = errors.New(`NX_CACHE_OIDC_PROVIDERS must be "github"`)
+	ErrGitHubIssuer = errors.New("NX_CACHE_GITHUB_ISSUER must be an absolute http or https URL")
+	ErrGitHubIDs    = errors.New("NX_CACHE_GITHUB_OWNER_IDS or NX_CACHE_GITHUB_REPOSITORY_IDS must " +
+		"list at least one ID, and every ID must be a decimal number")
+	ErrTrustedBranches = errors.New("NX_CACHE_GITHUB_TRUSTED_BRANCHES must list at least one valid " +
+		`path.Match pattern, and none may be "*"`)
+	ErrRepositoryToken = errors.New("NX_CACHE_GITHUB_READ_ONLY_TOKENS must be a comma-separated list of " +
+		"<repository_id>:<token> pairs, with tokens without whitespace that appear in no other token list")
 )
 
 const readyTimeout = 2 * time.Second
@@ -67,6 +82,9 @@ type Config struct {
 	// Metrics receives the server's collectors. Nil leaves them unregistered.
 	// New panics if they are already registered with it.
 	Metrics prometheus.Registerer
+	// TokenExchange turns on repository tiers and POST /v1/token. When it is
+	// set, AccessTokens may be empty.
+	TokenExchange *TokenExchange
 }
 
 type handler struct {
@@ -74,6 +92,8 @@ type handler struct {
 	s3      *s3.Client
 	log     *slog.Logger
 	metrics *metrics
+	// exchange is nil when token exchange is off.
+	exchange *exchange
 	// conditionalUnsupported records that storage rejected If-None-Match, so
 	// later uploads in this process are sent unconditionally.
 	conditionalUnsupported atomic.Bool
@@ -101,6 +121,11 @@ func New(ctx context.Context, cfg *Config) (http.Handler, error) {
 	mux.HandleFunc("GET /ready", h.ready)
 	mux.HandleFunc("PUT /v1/cache/{hash}", h.cacheRoute(h.upload))
 	mux.HandleFunc("GET /v1/cache/{hash}", h.cacheRoute(h.download))
+	if cfg.TokenExchange != nil {
+		h.exchange = newExchange(cfg.TokenExchange)
+		mux.HandleFunc("POST /v1/token", h.exchangeToken)
+		logExchangeConfig(h.log, cfg.TokenExchange.GitHub)
+	}
 	return h.logRequests(h.countRequests(collapseSlashes(mux))), nil
 }
 
@@ -142,12 +167,13 @@ func (h *handler) cacheRoute(serve func(http.ResponseWriter, *http.Request, *cac
 		req := cacheRequestFrom(r.Context())
 		req.hash = r.PathValue("hash")
 		req.bytes = max(r.ContentLength, 0)
-		req.access = h.access(r)
-		if req.access == accessNone {
-			writeText(w, http.StatusUnauthorized, "Missing or invalid authentication token")
+		cred, refusal := h.authenticate(r)
+		if refusal != "" {
+			writeText(w, http.StatusUnauthorized, refusal)
 			req.outcome = outcomeUnauthorised
 			return
 		}
+		req.cred, req.authenticated, req.tier = cred, true, cred.tier
 		if !validHash.MatchString(req.hash) {
 			writeText(w, http.StatusBadRequest, "Invalid hash")
 			req.outcome = outcomeBadRequest
@@ -158,7 +184,11 @@ func (h *handler) cacheRoute(serve func(http.ResponseWriter, *http.Request, *cac
 }
 
 func validate(cfg *Config) error {
-	if err := validateTokens(cfg.AccessTokens, cfg.ReadOnlyTokens); err != nil {
+	if len(cfg.AccessTokens) == 0 && cfg.TokenExchange == nil {
+		return ErrAccessToken
+	}
+	tokens, err := validateTokens(cfg.AccessTokens, cfg.ReadOnlyTokens)
+	if err != nil {
 		return err
 	}
 	if (cfg.AccessKeyID == "") != (cfg.SecretAccessKey == "") {
@@ -170,26 +200,93 @@ func validate(cfg *Config) error {
 	if cfg.StallTimeout <= 0 {
 		return ErrStallTimeout
 	}
+	if cfg.TokenExchange != nil {
+		return validateExchange(cfg.TokenExchange, tokens)
+	}
 	return nil
 }
 
-func validateTokens(access, readOnly []string) error {
-	if len(access) == 0 {
-		return ErrAccessToken
-	}
+// validateTokens returns the set of every static token.
+func validateTokens(access, readOnly []string) (map[string]struct{}, error) {
 	writers, err := tokenSet(access, ErrAccessToken)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if _, err := tokenSet(readOnly, ErrReadOnlyToken); err != nil {
-		return err
+	readers, err := tokenSet(readOnly, ErrReadOnlyToken)
+	if err != nil {
+		return nil, err
 	}
-	for _, token := range readOnly {
+	for token := range readers {
 		if _, both := writers[token]; both {
-			return ErrSameTokens
+			return nil, ErrSameTokens
+		}
+		writers[token] = struct{}{}
+	}
+	return writers, nil
+}
+
+var decimalID = regexp.MustCompile(`^[0-9]+$`)
+
+// validateExchange checks the token exchange settings; static holds every
+// static token, which repository read-only tokens must not repeat.
+func validateExchange(x *TokenExchange, static map[string]struct{}) error {
+	if x.Audience == "" {
+		return ErrOIDCAudience
+	}
+	if len(x.Keys) == 0 {
+		return ErrIssuedTokenKeys
+	}
+	for _, key := range x.Keys {
+		if len(key) < MinIssuedTokenKeyBytes {
+			return ErrIssuedTokenKeys
 		}
 	}
+	if x.TTL <= 0 || x.TTL > MaxIssuedTokenTTL {
+		return ErrIssuedTokenTTL
+	}
+	if x.GitHub == nil {
+		return ErrOIDCProvider
+	}
+	return validateGitHub(x.GitHub, static)
+}
+
+func validateGitHub(gh *GitHub, static map[string]struct{}) error {
+	issuer, err := url.Parse(gh.Issuer)
+	if err != nil || (issuer.Scheme != "https" && issuer.Scheme != "http") || issuer.Host == "" {
+		return ErrGitHubIssuer
+	}
+	if len(gh.OwnerIDs)+len(gh.RepositoryIDs) == 0 ||
+		slices.ContainsFunc(slices.Concat(gh.OwnerIDs, gh.RepositoryIDs), notDecimalID) {
+		return ErrGitHubIDs
+	}
+	if len(gh.TrustedBranches) == 0 || slices.ContainsFunc(gh.TrustedBranches, badBranchPattern) {
+		return ErrTrustedBranches
+	}
+	return validateRepositoryTokens(gh.ReadOnlyTokens, static)
+}
+
+// validateRepositoryTokens rejects malformed pairs and any token already in
+// static, then adds each token to it.
+func validateRepositoryTokens(tokens []RepositoryToken, static map[string]struct{}) error {
+	for _, t := range tokens {
+		_, reused := static[t.Token]
+		if notDecimalID(t.RepositoryID) || !wellFormedToken(t.Token) || reused {
+			return ErrRepositoryToken
+		}
+		static[t.Token] = struct{}{}
+	}
 	return nil
+}
+
+func notDecimalID(id string) bool {
+	return !decimalID.MatchString(id)
+}
+
+// badBranchPattern rejects invalid patterns and a bare "*", which would trust
+// every branch without a slash.
+func badBranchPattern(pattern string) bool {
+	_, err := path.Match(pattern, "")
+	return err != nil || pattern == "" || pattern == "*"
 }
 
 // tokenSet returns malformed for any ill-formed token and rejects repeats.
@@ -223,29 +320,27 @@ func ecmaSpace(r rune) bool {
 	}
 }
 
-type access int
-
-const (
-	accessNone access = iota
-	accessRead
-	accessWrite
-)
-
-func (h *handler) access(r *http.Request) access {
+// authenticate returns what the request's bearer token grants, or the 401
+// message. Static tokens are compared in full before any issued-token check.
+func (h *handler) authenticate(r *http.Request) (credential, string) {
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok || !wellFormedToken(token) {
-		return accessNone
+		return credential{}, msgInvalidToken
 	}
 	write := matchesAny(token, h.cfg.AccessTokens)
 	read := matchesAny(token, h.cfg.ReadOnlyTokens)
 	switch {
 	case write:
-		return accessWrite
+		return credential{write: true, tier: tierStatic}, ""
 	case read:
-		return accessRead
-	default:
-		return accessNone
+		return credential{tier: tierStatic}, ""
+	case h.exchange == nil:
+		return credential{}, msgInvalidToken
 	}
+	if repo, ok := h.exchange.repositoryReader(token); ok {
+		return credential{tier: tierTrusted, repo: repo}, ""
+	}
+	return h.exchange.authenticate(token, time.Now())
 }
 
 // matchesAny compares token with every candidate, without stopping at a match,
@@ -279,7 +374,7 @@ func (h *handler) ready(w http.ResponseWriter, r *http.Request) {
 func writeText(w http.ResponseWriter, status int, body string) {
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(status)
-	_, _ = io.WriteString(w, body)
+	_, _ = io.WriteString(w, body) //nolint:gosec // text/plain, never rendered as HTML
 }
 
 type statusRecorder struct {

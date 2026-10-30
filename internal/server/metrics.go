@@ -19,6 +19,8 @@ type metrics struct {
 	// unconditionalUploads counts PutObject calls sent without If-None-Match.
 	unconditionalUploads prometheus.Counter
 	stalls               *prometheus.CounterVec
+	// exchanges counts token exchanges by provider and result.
+	exchanges *prometheus.CounterVec
 	// all lists every collector above for register.
 	all collectorList
 }
@@ -56,6 +58,11 @@ func newMetrics() *metrics {
 			Help: "Transfers stopped because no bytes moved for the stall timeout, " +
 				"by HTTP method and the side it was waiting on.",
 		}, []string{"method", "side"}),
+		exchanges: factory.NewCounterVec(prometheus.CounterOpts{
+			Name: "nx_cache_token_exchanges_total",
+			Help: "Token exchanges by provider and result (issued, refused, invalid, unavailable). " +
+				"The provider is empty until a CI token's issuer is trusted.",
+		}, []string{"provider", "result"}),
 	}
 	m.all = all
 	return m

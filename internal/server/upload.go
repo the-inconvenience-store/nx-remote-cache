@@ -15,7 +15,7 @@ import (
 )
 
 func (h *handler) upload(w http.ResponseWriter, r *http.Request, req *cacheRequest) {
-	if req.access == accessRead {
+	if !req.cred.write {
 		writeText(w, http.StatusForbidden, "Read-only credentials cannot upload artifacts")
 		req.outcome = outcomeReadOnly
 		return
@@ -33,7 +33,8 @@ func (h *handler) upload(w http.ResponseWriter, r *http.Request, req *cacheReque
 		return
 	}
 
-	exists, err := h.objectExists(r, req.hash)
+	key := req.cred.writeKey(req.hash)
+	exists, err := h.objectExists(r, key)
 	if err != nil {
 		req.outcome = h.storageFailure(w, r, err)
 		return
@@ -47,13 +48,13 @@ func (h *handler) upload(w http.ResponseWriter, r *http.Request, req *cacheReque
 	digest := sha256.Sum256([]byte(token))
 	req.writer = hex.EncodeToString(digest[:])[:12]
 	req.uploadedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	req.outcome = h.putObject(w, r, req.hash, req.writer, req.uploadedAt)
+	req.outcome = h.putObject(w, r, req, key)
 }
 
 // objectExists is a fast duplicate check. It is not race-free; the conditional
 // PUT provides atomicity where storage supports it.
-func (h *handler) objectExists(r *http.Request, hash string) (bool, error) {
-	_, err := h.s3.HeadObject(r.Context(), &s3.HeadObjectInput{Bucket: &h.cfg.Bucket, Key: &hash})
+func (h *handler) objectExists(r *http.Request, key string) (bool, error) {
+	_, err := h.s3.HeadObject(r.Context(), &s3.HeadObjectInput{Bucket: &h.cfg.Bucket, Key: &key})
 	if err == nil {
 		return true, nil
 	}
@@ -63,7 +64,8 @@ func (h *handler) objectExists(r *http.Request, hash string) (bool, error) {
 	return false, err
 }
 
-func (h *handler) putObject(w http.ResponseWriter, r *http.Request, hash, writer, uploadedAt string) outcome {
+func (h *handler) putObject(w http.ResponseWriter, r *http.Request, req *cacheRequest, key string) outcome {
+	hash := req.hash
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	rc := http.NewResponseController(w)
@@ -73,10 +75,10 @@ func (h *handler) putObject(w http.ResponseWriter, r *http.Request, hash, writer
 	})
 	input := &s3.PutObjectInput{
 		Bucket:        &h.cfg.Bucket,
-		Key:           &hash,
+		Key:           &key,
 		Body:          body,
 		ContentLength: new(r.ContentLength),
-		Metadata:      map[string]string{"nx-writer": writer, "nx-uploaded-at": uploadedAt},
+		Metadata:      uploadMetadata(req),
 	}
 	conditional := !h.conditionalUnsupported.Load()
 	if conditional {
@@ -116,6 +118,24 @@ func (h *handler) putObject(w http.ResponseWriter, r *http.Request, hash, writer
 	default:
 		return h.storageFailure(w, r, err)
 	}
+}
+
+// uploadMetadata identifies the uploader: the token's digest, the upload time
+// and, for issued tokens, the repository, namespace and CI run.
+func uploadMetadata(req *cacheRequest) map[string]string {
+	metadata := map[string]string{"nx-writer": req.writer, "nx-uploaded-at": req.uploadedAt}
+	if req.cred.repo.id == "" {
+		return metadata
+	}
+	metadata["nx-repository"] = req.cred.repo.String()
+	for name, value := range map[string]string{
+		"nx-namespace": req.cred.namespace, "nx-run-id": req.cred.runID, "nx-actor": req.cred.actor,
+	} {
+		if value != "" {
+			metadata[name] = value
+		}
+	}
+	return metadata
 }
 
 // receivedBody counts the artifact bytes read from the upload request body.
