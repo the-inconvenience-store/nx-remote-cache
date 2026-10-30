@@ -54,11 +54,11 @@ func TestMetricsCountCacheRequestsByMethodAndOutcome(t *testing.T) {
 	do(t, h, call{method: http.MethodGet, path: "/health"})
 
 	want := `
-# HELP nx_cache_requests_total Cache requests by HTTP method and outcome.
+# HELP nx_cache_requests_total Cache requests by HTTP method, outcome and tier.
 # TYPE nx_cache_requests_total counter
-nx_cache_requests_total{method="GET",outcome="hit"} 1
-nx_cache_requests_total{method="GET",outcome="miss"} 1
-nx_cache_requests_total{method="PUT",outcome="stored"} 1
+nx_cache_requests_total{method="GET",outcome="hit",tier="static"} 1
+nx_cache_requests_total{method="GET",outcome="miss",tier="static"} 1
+nx_cache_requests_total{method="PUT",outcome="stored",tier="static"} 1
 `
 	if err := testutil.GatherAndCompare(registry, strings.NewReader(want), "nx_cache_requests_total"); err != nil {
 		t.Fatal(err)
@@ -242,5 +242,46 @@ func TestUnsupportedConditionWarnsOnceForConcurrentUploads(t *testing.T) {
 	}
 	if got := strings.Count(logs.String(), unsupportedConditionWarning); got != 1 {
 		t.Fatalf("%d unsupported-condition warnings, want 1:\n%s", got, logs.String())
+	}
+}
+
+func TestMetricsCountRequestsByTierAndExchangesByResult(t *testing.T) {
+	t.Parallel()
+	registry := prometheus.NewRegistry()
+	issuer := newFakeIssuer(t)
+	h := newHandler(t, newFakeS3(t).URL, options{configure: func(c *server.Config) {
+		withExchange(issuer)(c)
+		c.Metrics = registry
+	}})
+
+	trusted := issue(t, h, issuer, push("main", true))
+	put(t, h, "t", trusted, "trusted artifact")
+	pr := issue(t, h, issuer, pullRequest(1))
+	get(t, h, "t", pr)
+	put(t, h, "p", pr, "pr artifact")
+	get(t, h, "p", pr)
+	get(t, h, "missing", pr)
+	get(t, h, "t", "wrong")
+	exchange(t, h, issuer.sign(t, map[string]any{"event_name": "pull_request_target", "ref": "refs/heads/main"}))
+	exchange(t, h, "not-a-jwt")
+
+	want := `
+# HELP nx_cache_requests_total Cache requests by HTTP method, outcome and tier.
+# TYPE nx_cache_requests_total counter
+nx_cache_requests_total{method="GET",outcome="hit",tier="scoped"} 1
+nx_cache_requests_total{method="GET",outcome="hit",tier="trusted"} 1
+nx_cache_requests_total{method="GET",outcome="miss",tier="scoped"} 1
+nx_cache_requests_total{method="GET",outcome="unauthorised",tier=""} 1
+nx_cache_requests_total{method="PUT",outcome="stored",tier="scoped"} 1
+nx_cache_requests_total{method="PUT",outcome="stored",tier="trusted"} 1
+# HELP nx_cache_token_exchanges_total Token exchanges by provider and result (issued, refused, invalid, unavailable). The provider is empty until a CI token's issuer is trusted.
+# TYPE nx_cache_token_exchanges_total counter
+nx_cache_token_exchanges_total{provider="",result="invalid"} 1
+nx_cache_token_exchanges_total{provider="github",result="issued"} 2
+nx_cache_token_exchanges_total{provider="github",result="refused"} 1
+`
+	if err := testutil.GatherAndCompare(registry, strings.NewReader(want),
+		"nx_cache_requests_total", "nx_cache_token_exchanges_total"); err != nil {
+		t.Fatal(err)
 	}
 }
