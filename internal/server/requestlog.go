@@ -28,8 +28,13 @@ const (
 // cacheRequest is what a cache route learned about its request; the request
 // log line reports it.
 type cacheRequest struct {
-	hash   string
-	access access
+	hash string
+	// cred is what the token grants; set only when authenticated.
+	cred          credential
+	authenticated bool
+	// tier is the tier that served or stored the artifact, or else the
+	// credential's tier; empty when the request was not authenticated.
+	tier tier
 	// bytes is the artifact size: the declared Content-Length of an upload, or
 	// the bytes of a download sent to the client.
 	bytes      int64
@@ -49,15 +54,11 @@ func cacheRequestFrom(ctx context.Context) *cacheRequest {
 	return req
 }
 
-func (a access) String() string {
-	switch a {
-	case accessRead:
-		return "ro"
-	case accessWrite:
+func (c *credential) access() string {
+	if c.write {
 		return "rw"
-	case accessNone:
 	}
-	return ""
+	return "ro"
 }
 
 func (h *handler) logRequests(next http.Handler) http.Handler {
@@ -72,7 +73,7 @@ func (h *handler) logRequests(next http.Handler) http.Handler {
 }
 
 // requestLogAttrs is the most attributes a request log line has.
-const requestLogAttrs = 9
+const requestLogAttrs = 12
 
 // logRequest writes the request log line. Cache requests add their fields;
 // tokens are never logged.
@@ -84,14 +85,25 @@ func (h *handler) logRequest(r *http.Request, rec *statusRecorder, req *cacheReq
 		slog.Int("status", rec.status),
 		slog.Duration("duration", time.Since(start)))
 	if req.outcome != "" {
-		attrs = append(attrs, slog.String("hash", req.hash), slog.Int64("bytes", req.bytes))
-		if req.access != accessNone {
-			attrs = append(attrs, slog.String("access", req.access.String()))
-		}
-		if req.writer != "" {
-			attrs = append(attrs, slog.String("writer", req.writer))
-		}
-		attrs = append(attrs, slog.String("outcome", string(req.outcome)))
+		attrs = req.appendLogAttrs(attrs)
 	}
 	h.log.LogAttrs(r.Context(), slog.LevelInfo, "request", attrs...)
+}
+
+// appendLogAttrs adds a cache request's fields to its log line.
+func (req *cacheRequest) appendLogAttrs(attrs []slog.Attr) []slog.Attr {
+	attrs = append(attrs, slog.String("hash", req.hash), slog.Int64("bytes", req.bytes))
+	if req.authenticated {
+		attrs = append(attrs, slog.String("access", req.cred.access()), slog.String("tier", string(req.tier)))
+	}
+	if req.cred.repo.id != "" {
+		attrs = append(attrs, slog.String("repository", req.cred.repo.String()))
+	}
+	if req.cred.namespace != "" {
+		attrs = append(attrs, slog.String("namespace", req.cred.namespace))
+	}
+	if req.writer != "" {
+		attrs = append(attrs, slog.String("writer", req.writer))
+	}
+	return append(attrs, slog.String("outcome", string(req.outcome)))
 }
