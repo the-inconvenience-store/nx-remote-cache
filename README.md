@@ -208,7 +208,7 @@ permissions:
   id-token: write
 steps:
   - uses: actions/checkout@v5
-  - uses: the-inconvenience-store/nx-remote-cache/actions/token@<release commit SHA> # vX.Y.Z
+  - uses: the-inconvenience-store/nx-remote-cache/actions/token@bce5700ce85ad8b8cd08b0f5bab8f31d4a8ad242 # v0.3.0
     with:
       server-url: https://nx-cache.example.com
       audience: https://nx-cache.example.com # NX_CACHE_OIDC_AUDIENCE
