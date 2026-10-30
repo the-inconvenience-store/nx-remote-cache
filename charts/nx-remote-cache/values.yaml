@@ -89,12 +89,34 @@ config:
     # Optional "true" (path-style) or "false" (virtual-hosted style). Empty
     # keeps the default: virtual-hosted on AWS S3, path-style with endpointUrl.
     forcePathStyle: ""
+  # Repository tiers and per-PR caching through GitHub Actions OIDC token
+  # exchange (POST /v1/token). Off while providers is empty; none of these
+  # values are rendered then. See the chart README.
+  tokenExchange:
+    # NX_CACHE_OIDC_PROVIDERS: "github" turns token exchange on.
+    providers: ""
+    # NX_CACHE_OIDC_AUDIENCE: the "aud" CI tokens must carry; required when on.
+    audience: ""
+    # NX_CACHE_ISSUED_TOKEN_TTL: Go duration up to 120h; empty keeps 6h.
+    issuedTokenTTL: ""
+    github:
+      # NX_CACHE_GITHUB_ISSUER: empty keeps https://token.actions.githubusercontent.com.
+      issuer: ""
+      # NX_CACHE_GITHUB_OWNER_IDS / NX_CACHE_GITHUB_REPOSITORY_IDS:
+      # comma-separated numeric IDs; set at least one.
+      ownerIds: ""
+      repositoryIds: ""
+      # NX_CACHE_GITHUB_TRUSTED_BRANCHES: comma-separated path.Match
+      # patterns; empty keeps "main".
+      trustedBranches: ""
 
 # Secret strategy: either supply the values below to have the chart create a
 # Secret, or set existingSecret to the name of an externally managed Secret.
 # Secret keys:
-#   - nx-cache-access-token     (required)
+#   - nx-cache-access-token     (required unless token exchange is on)
 #   - nx-cache-read-only-token  (optional)
+#   - nx-cache-issued-token-keys       (required when token exchange is on)
+#   - nx-cache-github-read-only-tokens (optional; token exchange only)
 #   - aws-access-key-id         (optional; omit both AWS keys to use the AWS
 #   - aws-secret-access-key      default credential chain, e.g. IRSA)
 # Empty optional values are omitted from the chart-created Secret.
@@ -104,10 +126,15 @@ secrets:
   nxCacheAccessToken: ""
   # Optional comma-separated list; no token may also be an access token.
   nxCacheReadOnlyToken: ""
+  # Token exchange: comma-separated base64 keys of 32 bytes or more
+  # (openssl rand -base64 32); the first signs, all verify.
+  issuedTokenKeys: ""
+  # Token exchange: comma-separated <repository_id>:<token> pairs, each
+  # reading one repository's trusted tier.
+  githubReadOnlyTokens: ""
   # Optional; set both or neither.
   awsAccessKeyId: ""
   awsSecretAccessKey: ""
-
 # Optional TLS/HTTPS. When enabled the server reads the cert/key from a mounted
 # Secret and serves HTTPS instead of HTTP. Disabled by default — TLS is commonly
 # terminated at the Ingress instead.

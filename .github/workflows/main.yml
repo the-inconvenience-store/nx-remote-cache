@@ -205,6 +205,14 @@ jobs:
           mise exec -- helm template test charts/nx-remote-cache \
             --set secrets.nxCacheAccessToken=token \
             > /dev/null
+      - name: helm template smoke test (token exchange, no static access token)
+        run: |
+          mise exec -- helm template test charts/nx-remote-cache \
+            --set config.tokenExchange.providers=github \
+            --set config.tokenExchange.audience=https://nx-cache.example.com \
+            --set config.tokenExchange.github.ownerIds=1001 \
+            --set secrets.issuedTokenKeys=a2V5 \
+            > /dev/null
 
   publish:
     name: Publish Image
